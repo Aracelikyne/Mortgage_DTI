@@ -18,7 +18,7 @@ const loadSavedState = () => {
   try {
     const saved = localStorage.getItem("bill-tracker-state");
     if (saved) return JSON.parse(saved);
-  } catch (e) {
+  } catch {
     // Ignore JSON parsing errors
   }
   return {};
@@ -58,7 +58,7 @@ export default function BillTracker() {
           "bill-tracker-state",
           JSON.stringify({ debts, fixed, income, netIncome, includeRent, recurringExtra, strategy, targetDTI, mortgageEstimate, incomeSources, boosts })
         );
-      } catch (e) {
+      } catch {
         // best effort
       }
     }, 700);
@@ -110,7 +110,7 @@ export default function BillTracker() {
     return out;
   }, [sim.series]);
 
-  function startingTotalRef(list) {
+  function startingTotalRef() {
     // stable baseline = sum of original preloaded balances, used only for the wall visual proportion
     return initialDebts.reduce((s, d) => s + (d.balance || 0), 0) || 1;
   }
