@@ -4,7 +4,7 @@ import {
 } from "recharts";
 import {
   Home, KeyRound, Lock, Plus, Trash2, ChevronDown, ChevronUp,
-  Wallet, TrendingDown, Sparkles, PiggyBank, Calendar
+  Wallet, TrendingDown, Sparkles, PiggyBank, Calendar, LogOut
 } from "lucide-react";
 
 // Import your extracted logic and components
@@ -12,21 +12,76 @@ import { CATEGORY_OPTIONS, FIXED_CATEGORY_OPTIONS, TIERS, initialDebts, initialF
 import { allocateExtra, allocateMaxCashFlow, buildPaycheckPlan, fastestStrategyForBoost, minimumAdjustedDebts, money, monthLabel, monthLabelFull, pct, simulatePayoff, fmtDate } from "./utils/finance";
 import AddDebtModal from "./components/AddDebtModal";
 import AddFixedModal from "./components/AddFixedModal";
+import { supabase } from "./lib/supabaseClient";
 
-// Load state before component mounts to prevent double-rendering
-const loadSavedState = () => {
-  try {
-    const saved = localStorage.getItem("bill-tracker-state");
-    if (saved) return JSON.parse(saved);
-  } catch {
-    // Ignore JSON parsing errors
+export default function App() {
+  const [session, setSession] = useState(undefined); // undefined = still checking, null = signed out
+  const [saved, setSaved] = useState(null); // null until the row has been fetched
+
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data }) => setSession(data.session ?? null));
+    const { data: listener } = supabase.auth.onAuthStateChange((_event, newSession) => {
+      setSession(newSession);
+      if (!newSession) setSaved(null);
+    });
+    return () => listener.subscription.unsubscribe();
+  }, []);
+
+  useEffect(() => {
+    if (!session) return;
+    let cancelled = false;
+    supabase
+      .from("app_state")
+      .select("data")
+      .eq("user_id", session.user.id)
+      .maybeSingle()
+      .then(({ data, error }) => {
+        if (cancelled) return;
+        if (error) console.error(error);
+        setSaved(data?.data || {});
+      });
+    return () => { cancelled = true; };
+  }, [session]);
+
+  if (session === undefined) {
+    return <AuthScreen loading />;
   }
-  return {};
-};
+  if (!session) {
+    return <AuthScreen />;
+  }
+  if (saved === null) {
+    return <AuthScreen loading />;
+  }
+  return <BillTracker key={session.user.id} saved={saved} userId={session.user.id} />;
+}
 
-export default function BillTracker() {
-  const saved = loadSavedState();
+function AuthScreen({ loading }) {
+  return (
+    <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", background: "#ECE6D6", fontFamily: "Inter, sans-serif" }}>
+      <div style={{ background: "#F6F2E7", border: "1px solid #CFC6AE", borderRadius: 6, padding: "32px 36px", textAlign: "center", maxWidth: 360 }}>
+        <div style={{ fontFamily: "Fraunces, serif", fontWeight: 600, fontSize: 22, marginBottom: 8 }}>Clear to Close</div>
+        {loading ? (
+          <div style={{ color: "#5B6570", fontSize: 14 }}>Loading…</div>
+        ) : (
+          <>
+            <p style={{ color: "#5B6570", fontSize: 14, marginBottom: 18 }}>Sign in to see and edit your data.</p>
+            <button
+              onClick={() => supabase.auth.signInWithOAuth({ provider: "github" })}
+              style={{
+                fontFamily: "Inter, sans-serif", fontWeight: 600, fontSize: 13.5, padding: "9px 16px",
+                borderRadius: 3, border: "1px solid #22282E", cursor: "pointer", background: "#22282E", color: "#ECE6D6",
+              }}
+            >
+              Sign in with GitHub
+            </button>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
 
+function BillTracker({ saved, userId }) {
   const [debts, setDebts] = useState(saved.debts || initialDebts);
   const [fixed, setFixed] = useState(saved.fixed || initialFixed);
   const [income, setIncome] = useState(saved.income ?? 15000);
@@ -50,20 +105,27 @@ export default function BillTracker() {
   const saveTimer = useRef(null);
 
   // ---- persistence ----
+  const isFirstRender = useRef(true);
   useEffect(() => {
+    if (isFirstRender.current) {
+      isFirstRender.current = false;
+      return;
+    }
     if (saveTimer.current) clearTimeout(saveTimer.current);
     saveTimer.current = setTimeout(() => {
-      try {
-        localStorage.setItem(
-          "bill-tracker-state",
-          JSON.stringify({ debts, fixed, income, netIncome, includeRent, recurringExtra, strategy, targetDTI, mortgageEstimate, incomeSources, boosts })
-        );
-      } catch {
-        // best effort
-      }
+      supabase
+        .from("app_state")
+        .upsert({
+          user_id: userId,
+          data: { debts, fixed, income, netIncome, includeRent, recurringExtra, strategy, targetDTI, mortgageEstimate, incomeSources, boosts },
+          updated_at: new Date().toISOString(),
+        })
+        .then(({ error }) => {
+          if (error) console.error(error);
+        });
     }, 700);
     return () => clearTimeout(saveTimer.current);
-  }, [debts, fixed, income, netIncome, includeRent, recurringExtra, strategy, targetDTI, mortgageEstimate, incomeSources, boosts]);
+  }, [debts, fixed, income, netIncome, includeRent, recurringExtra, strategy, targetDTI, mortgageEstimate, incomeSources, boosts, userId]);
 
   // ---- derived numbers ----
   const debtBills = debts.filter((d) => d.isDebt !== false);
@@ -110,9 +172,10 @@ export default function BillTracker() {
     return out;
   }, [sim.series]);
 
+  const [wallBaseline] = useState(() => debts.reduce((s, d) => s + Number(d.balance || 0), 0) || 1);
   function startingTotalRef() {
-    // stable baseline = sum of original preloaded balances, used only for the wall visual proportion
-    return initialDebts.reduce((s, d) => s + (d.balance || 0), 0) || 1;
+    // stable baseline captured on first load, used only for the wall visual proportion
+    return wallBaseline;
   }
 
   const tierGroups = [1, 2, 3, 4].map((t) => ({
@@ -404,8 +467,13 @@ export default function BillTracker() {
       `}</style>
 
       <div className="ctc-shell">
-        <div className="ctc-eyebrow">Debt payoff & DTI tracker</div>
-        <h1 className="ctc-title">Clear to Close</h1>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+          <div>
+            <div className="ctc-eyebrow">Debt payoff & DTI tracker</div>
+            <h1 className="ctc-title">Clear to Close</h1>
+          </div>
+          <button className="btn btn-ghost btn-sm" onClick={() => supabase.auth.signOut()}><LogOut size={13} /> Sign out</button>
+        </div>
         <p className="ctc-sub">
           Every bill you owe, one dashboard, pointed at a mortgage-ready DTI. Add income, drop in extra
           money when you have it, and this recalculates your debt-free date on its own.
@@ -955,7 +1023,7 @@ export default function BillTracker() {
           Balances shown as "—" haven't been entered yet. Interest accrues monthly only where you've set an APR — otherwise
           minimum payments are treated as pure principal reduction. DTI reference bands (36% / 43%) are common general
           guidelines, not a specific lender's requirement — actual qualifying DTI varies by loan program and lender. This
-          tool isn't financial or lending advice. Your data is saved to this browser automatically as you go.
+          tool isn't financial or lending advice. Your data is saved to your account automatically as you go, and only visible when you're signed in.
         </div>
       </div>
 
