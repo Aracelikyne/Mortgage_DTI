@@ -27,6 +27,7 @@ function readLegacyLocalState() {
 export default function App() {
   const [session, setSession] = useState(undefined); // undefined = still checking, null = signed out
   const [saved, setSaved] = useState(null); // null until the row has been fetched
+  const [loadError, setLoadError] = useState(null);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => setSession(data.session ?? null));
@@ -47,7 +48,12 @@ export default function App() {
       .maybeSingle()
       .then(async ({ data, error }) => {
         if (cancelled) return;
-        if (error) console.error(error);
+        if (error) {
+          console.error(error);
+          setLoadError("Couldn't reach your saved data in Supabase — starting blank, and edits may not save until this is fixed. Check the browser console for details.");
+          setSaved({});
+          return;
+        }
 
         if (data?.data) {
           setSaved(data.data);
@@ -64,8 +70,12 @@ export default function App() {
             data: legacy,
             updated_at: new Date().toISOString(),
           });
-          if (upsertError) console.error(upsertError);
-          if (!cancelled) setSaved(legacy);
+          if (cancelled) return;
+          if (upsertError) {
+            console.error(upsertError);
+            setLoadError("Couldn't save your imported data to Supabase — the app_state table may be missing (see supabase/schema.sql). Your edits from here may not save either.");
+          }
+          setSaved(legacy);
           return;
         }
 
@@ -83,7 +93,19 @@ export default function App() {
   if (saved === null) {
     return <AuthScreen loading />;
   }
-  return <BillTracker key={session.user.id} saved={saved} userId={session.user.id} />;
+  return (
+    <>
+      {loadError && (
+        <div style={{
+          background: "#F0D8D3", color: "#6B2E26", borderBottom: "1px solid #DDB4AA",
+          padding: "10px 20px", fontSize: 13, fontFamily: "Inter, sans-serif", textAlign: "center",
+        }}>
+          {loadError}
+        </div>
+      )}
+      <BillTracker key={session.user.id} saved={saved} userId={session.user.id} />
+    </>
+  );
 }
 
 function AuthScreen({ loading }) {
