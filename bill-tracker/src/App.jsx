@@ -450,7 +450,7 @@ function BillTracker({ saved, userId }) {
         }
         table.ledger td { padding: 7px 8px; border-bottom: 1px solid #EFE9D9; }
         table.ledger input, table.ledger select {
-          width: 100%; border: 1px solid transparent; background: transparent; padding: 4px 5px; border-radius: 3px;
+          width: 100%; min-width: 36px; border: 1px solid transparent; background: transparent; padding: 4px 5px; border-radius: 3px;
           font-family: 'IBM Plex Mono', monospace; font-size: 13px; color: var(--ink);
         }
         table.ledger input:hover, table.ledger select:hover { border-color: var(--line); }
@@ -931,8 +931,8 @@ function BillTracker({ saved, userId }) {
                         <th>Monthly</th>
                         <th>Balance</th>
                         <th>APR %</th>
-                        <th>Due day</th>
-                        <th title="Days after due date before it's actually late">Grace</th>
+                        <th style={{ width: "10%" }}>Due day</th>
+                        <th style={{ width: "8%" }} title="Days after due date before it's actually late">Grace</th>
                         <th style={{ width: "9%" }} title="Counts toward your debt-free projection">Goal</th>
                         <th style={{ width: 30 }}></th>
                       </tr>
@@ -981,8 +981,8 @@ function BillTracker({ saved, userId }) {
                         <th style={{ width: "14%" }}>Type</th>
                         <th>Monthly</th>
                         <th>Balance</th>
-                        <th>Due day</th>
-                        <th>Grace</th>
+                        <th style={{ width: "10%" }}>Due day</th>
+                        <th style={{ width: "8%" }}>Grace</th>
                         <th style={{ width: "9%" }} title="Counts toward your debt-free projection">Goal</th>
                         <th style={{ width: 30 }}></th>
                       </tr>
@@ -1028,8 +1028,8 @@ function BillTracker({ saved, userId }) {
                   <th style={{ width: "18%" }}>Name</th>
                   <th style={{ width: "13%" }}>Type</th>
                   <th>Monthly</th>
-                  <th>Due day</th>
-                  <th>Grace</th>
+                  <th style={{ width: "10%" }}>Due day</th>
+                  <th style={{ width: "8%" }}>Grace</th>
                   <th>Note</th>
                   <th style={{ width: 30 }}></th>
                 </tr>
