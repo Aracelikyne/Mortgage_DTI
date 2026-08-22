@@ -945,7 +945,11 @@ function BillTracker({ saved, userId }) {
                   {paycheckPlan.paychecks.slice(0, 8).map((p) => (
                     <div className="paycheck-card" key={p.id}>
                       <div className="paycheck-date">{fmtDate(p.date)}</div>
-                      <div className="paycheck-source">{p.sourceName} · {money(p.amount)}</div>
+                      <div className="paycheck-source">
+                        {p.sources.length > 1
+                          ? p.sources.map((s) => `${s.sourceName} ${money(s.amount)}`).join(" + ") + ` = ${money(p.amount)}`
+                          : `${p.sourceName} · ${money(p.amount)}`}
+                      </div>
                       <div className="paycheck-items">
                         {p.items.length === 0 && <div className="ctc-hint">No bills assigned this check.</div>}
                         {p.items.map((it, idx) => (

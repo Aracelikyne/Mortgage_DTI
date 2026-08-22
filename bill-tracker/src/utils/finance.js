@@ -261,24 +261,39 @@ export function dueDateInMonth(dueDay, year, monthIndex) {
 }
 
 // All upcoming paychecks across every income source, within the horizon.
+// Paychecks landing on the same calendar date are combined into one shared
+// pool so bills are allocated against the household's total for that day,
+// rather than against a single person's check in isolation.
 export function generatePaychecks(incomeSources, horizonDays) {
   const today = new Date();
   today.setHours(0, 0, 0, 0);
   const horizonEnd = new Date(today);
   horizonEnd.setDate(horizonEnd.getDate() + horizonDays);
-  const checks = [];
+  const byDate = new Map();
   for (const src of incomeSources) {
     if (!src.nextPayDate || !src.amount) continue;
     let d = new Date(src.nextPayDate + "T00:00:00");
     let guard = 0;
     while (d <= horizonEnd && guard < 80) {
       if (d >= today) {
-        checks.push({ id: `${src.id}-${isoDate(d)}`, sourceId: src.id, sourceName: src.name, date: new Date(d), amount: Number(src.amount), remaining: Number(src.amount), items: [] });
+        const key = isoDate(d);
+        const amount = Number(src.amount);
+        if (!byDate.has(key)) {
+          byDate.set(key, { id: key, date: new Date(d), amount: 0, remaining: 0, items: [], sources: [] });
+        }
+        const check = byDate.get(key);
+        check.amount += amount;
+        check.remaining += amount;
+        check.sources.push({ sourceName: src.name, amount });
       }
       d = advanceByFrequency(d, src.frequency || "biweekly");
       guard++;
     }
   }
+  const checks = Array.from(byDate.values());
+  checks.forEach((c) => {
+    c.sourceName = c.sources.map((s) => s.sourceName).join(" + ");
+  });
   checks.sort((a, b) => a.date - b.date);
   return checks;
 }
