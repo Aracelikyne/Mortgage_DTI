@@ -292,14 +292,20 @@ export function dueDateInMonth(dueDay, year, monthIndex) {
 // Paychecks landing on the same calendar date are combined into one shared
 // pool so bills are allocated against the household's total for that day,
 // rather than against a single person's check in isolation.
-export function generatePaychecks(incomeSources, horizonDays) {
+//
+// `overrides` lets a specific occurrence's date be nudged (a holiday shifted
+// payday, etc.) without touching the source's regular schedule: shape is
+// { [sourceId]: { [naturallyComputedIsoDate]: overriddenIsoDate } }. The
+// lookup key is always the date the recurring schedule would have produced
+// naturally, so overrides stay stable even as other occurrences shift.
+export function generatePaychecks(incomeSources, horizonDays, overrides = {}) {
   const today = new Date();
   today.setHours(0, 0, 0, 0);
   const horizonEnd = new Date(today);
   horizonEnd.setDate(horizonEnd.getDate() + horizonDays);
   const byDate = new Map();
 
-  function addCheck(date, amount, sourceName) {
+  function addCheck(date, amount, sourceId, sourceName, originalDate) {
     const key = isoDate(date);
     if (!byDate.has(key)) {
       byDate.set(key, { id: key, date: new Date(date), amount: 0, remaining: 0, items: [], sources: [] });
@@ -307,7 +313,7 @@ export function generatePaychecks(incomeSources, horizonDays) {
     const check = byDate.get(key);
     check.amount += amount;
     check.remaining += amount;
-    check.sources.push({ sourceName, amount });
+    check.sources.push({ sourceId, sourceName, amount, originalDate: new Date(originalDate) });
   }
 
   for (const src of incomeSources) {
@@ -321,10 +327,15 @@ export function generatePaychecks(incomeSources, horizonDays) {
       guard++;
     }
     const amount = Number(src.amount);
+    const sourceOverrides = overrides[src.id] || {};
+    const resolve = (dt) => {
+      const overridden = sourceOverrides[isoDate(dt)];
+      return overridden ? new Date(overridden + "T00:00:00") : dt;
+    };
     const future = occurrences.filter((dt) => dt >= today);
     const mostRecentPast = occurrences.filter((dt) => dt < today).sort((a, b) => b - a)[0];
-    if (mostRecentPast) addCheck(mostRecentPast, amount, src.name);
-    for (const dt of future) addCheck(dt, amount, src.name);
+    if (mostRecentPast) addCheck(resolve(mostRecentPast), amount, src.id, src.name, mostRecentPast);
+    for (const dt of future) addCheck(resolve(dt), amount, src.id, src.name, dt);
   }
 
   const checks = Array.from(byDate.values());
@@ -371,8 +382,8 @@ export function generateBillInstances(bills, horizonDays) {
 // across every paycheck in their grace window right away (in half, thirds, however many
 // checks are eligible), since paying them that way has no real downside for the user — this
 // frees up whole-check capacity for bills that genuinely need to land on a single check.
-export function buildPaycheckPlan(incomeSources, bills, horizonDays = 95, paidByMonth = {}) {
-  const paychecks = generatePaychecks(incomeSources, horizonDays);
+export function buildPaycheckPlan(incomeSources, bills, horizonDays = 95, paidByMonth = {}, paycheckOverrides = {}) {
+  const paychecks = generatePaychecks(incomeSources, horizonDays, paycheckOverrides);
   const rawInstances = generateBillInstances(bills, horizonDays);
   const unscheduled = bills.filter((b) => b.isDebt !== false && !b.dueDay && Number(b.monthly) > 0);
   const shortfalls = [];

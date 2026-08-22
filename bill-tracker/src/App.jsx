@@ -4,7 +4,7 @@ import {
 } from "recharts";
 import {
   Home, KeyRound, Lock, Plus, Trash2, ChevronDown, ChevronUp, ChevronLeft, ChevronRight,
-  Wallet, TrendingDown, Sparkles, PiggyBank, Calendar, LogOut, CheckCircle2, Circle
+  Wallet, TrendingDown, Sparkles, PiggyBank, Calendar, LogOut, CheckCircle2, Circle, Pencil
 } from "lucide-react";
 
 // Import your extracted logic and components
@@ -155,6 +155,8 @@ function BillTracker({ saved, userId }) {
   ]);
   const [boosts, setBoosts] = useState(saved.boosts || []);
   const [paidByMonth, setPaidByMonth] = useState(saved.paidByMonth || {});
+  const [debtBaseline, setDebtBaseline] = useState(saved.debtBaseline ?? null);
+  const [paycheckOverrides, setPaycheckOverrides] = useState(saved.paycheckOverrides || {});
   const [page, setPage] = useState("dashboard");
 
   const [extraAmount, setExtraAmount] = useState("");
@@ -162,6 +164,7 @@ function BillTracker({ saved, userId }) {
   const [showAddDebt, setShowAddDebt] = useState(false);
   const [showAddFixed, setShowAddFixed] = useState(false);
   const [collapsedTiers, setCollapsedTiers] = useState({});
+  const [editingPaycheckId, setEditingPaycheckId] = useState(null);
   const [saveStatus, setSaveStatus] = useState("idle"); // idle | saving | saved | error
   const saveTimer = useRef(null);
 
@@ -169,7 +172,7 @@ function BillTracker({ saved, userId }) {
   const isFirstRender = useRef(true);
   const latestState = useRef(null);
   useEffect(() => {
-    latestState.current = { debts, fixed, income, netIncome, includeRent, recurringExtra, strategy, targetDTI, mortgageEstimate, incomeSources, boosts, paidByMonth };
+    latestState.current = { debts, fixed, income, netIncome, includeRent, recurringExtra, strategy, targetDTI, mortgageEstimate, incomeSources, boosts, paidByMonth, debtBaseline, paycheckOverrides };
   });
 
   const flushSave = useCallback(() => {
@@ -200,7 +203,7 @@ function BillTracker({ saved, userId }) {
     if (saveTimer.current) clearTimeout(saveTimer.current);
     saveTimer.current = setTimeout(flushSave, 700);
     return () => clearTimeout(saveTimer.current);
-  }, [debts, fixed, income, netIncome, includeRent, recurringExtra, strategy, targetDTI, mortgageEstimate, incomeSources, boosts, paidByMonth, flushSave]);
+  }, [debts, fixed, income, netIncome, includeRent, recurringExtra, strategy, targetDTI, mortgageEstimate, incomeSources, boosts, paidByMonth, debtBaseline, paycheckOverrides, flushSave]);
 
   // Flush immediately when the tab is backgrounded/closed instead of losing a
   // pending debounced save — visibilitychange fires reliably before teardown,
@@ -251,8 +254,18 @@ function BillTracker({ saved, userId }) {
       ...debts.filter((d) => d.isDebt !== false).map((d) => ({ id: d.id, name: d.name, monthly: d.monthly, dueDay: d.dueDay, graceDays: d.graceDays, splitFriendly: d.splitFriendly })),
       ...fixed.map((f) => ({ id: f.id, name: f.name, monthly: f.monthly, dueDay: f.dueDay, graceDays: f.graceDays, splitFriendly: f.splitFriendly })),
     ];
-    return buildPaycheckPlan(incomeSources, billsForPlan, 95, paidByMonth);
-  }, [incomeSources, debts, fixed, paidByMonth]);
+    return buildPaycheckPlan(incomeSources, billsForPlan, 95, paidByMonth, paycheckOverrides);
+  }, [incomeSources, debts, fixed, paidByMonth, paycheckOverrides]);
+
+  function overridePaycheckDate(sourceId, originalDate, newIsoDate) {
+    const key = isoDate(originalDate);
+    setPaycheckOverrides((prev) => {
+      const forSource = { ...(prev[sourceId] || {}) };
+      if (newIsoDate) forSource[key] = newIsoDate;
+      else delete forSource[key];
+      return { ...prev, [sourceId]: forSource };
+    });
+  }
 
 
   // chart sampling
@@ -264,9 +277,21 @@ function BillTracker({ saved, userId }) {
     return out;
   }, [sim.series]);
 
-  const [wallBaseline] = useState(() => debts.reduce((s, d) => s + Number(d.balance || 0), 0) || 1);
+  // The wall's "already paid off" reference point. Persisted rather than
+  // recomputed on every load, so it's a genuine since-you-started milestone
+  // instead of resetting to the current total (and erasing all visible
+  // progress) every time the page reloads. Grows automatically if new debt
+  // brings the current total above it, so the bar never overflows past 100%.
+  const [lastSeenTotal, setLastSeenTotal] = useState(totalDebtBalance);
+  if (totalDebtBalance !== lastSeenTotal) {
+    setLastSeenTotal(totalDebtBalance);
+    if (debtBaseline === null || totalDebtBalance > debtBaseline) {
+      setDebtBaseline(totalDebtBalance || 1);
+    }
+  }
+  const wallBaseline = Math.max(debtBaseline || 0, totalDebtBalance) || 1;
+  const paidDownSoFar = Math.max(0, wallBaseline - totalDebtBalance);
   function startingTotalRef() {
-    // stable baseline captured on first load, used only for the wall visual proportion
     return wallBaseline;
   }
 
@@ -574,16 +599,21 @@ function BillTracker({ saved, userId }) {
           </div>
         </div>
 
-        <div className="strategy-pills" style={{ marginTop: 10, marginBottom: 4 }}>
+        <div className="strategy-pills" style={{ marginTop: 10, marginBottom: 4, flexWrap: "wrap" }}>
           <button className={`pill ${page === "dashboard" ? "active" : ""}`} onClick={() => setPage("dashboard")}>Dashboard</button>
-          <button className={`pill ${page === "monthly" ? "active" : ""}`} onClick={() => setPage("monthly")}>Monthly plan</button>
+          <button className={`pill ${page === "budget" ? "active" : ""}`} onClick={() => setPage("budget")}>Income & Budget</button>
+          <button className={`pill ${page === "timeline" ? "active" : ""}`} onClick={() => setPage("timeline")}>Payoff Timeline</button>
+          <button className={`pill ${page === "paycheck" ? "active" : ""}`} onClick={() => setPage("paycheck")}>Paycheck Plan</button>
+          <button className={`pill ${page === "debts" ? "active" : ""}`} onClick={() => setPage("debts")}>Debts</button>
+          <button className={`pill ${page === "fixed" ? "active" : ""}`} onClick={() => setPage("fixed")}>Fixed Expenses</button>
+          <button className={`pill ${page === "monthly" ? "active" : ""}`} onClick={() => setPage("monthly")}>Monthly Plan</button>
         </div>
 
         {page === "dashboard" && (
         <>
         <p className="ctc-sub">
-          Every bill you owe, one dashboard, pointed at a mortgage-ready DTI. Add income, drop in extra
-          money when you have it, and this recalculates your debt-free date on its own.
+          Every bill you owe, one quick-reference view of where you stand. Use the tabs above for
+          income & budgeting, the payoff timeline, your paycheck plan, and the debt/expense ledgers.
         </p>
 
         {/* ---- the wall ---- */}
@@ -593,7 +623,7 @@ function BillTracker({ saved, userId }) {
             {sim.freedomMonth !== null ? (
               <span className="wall-key"><KeyRound size={14} /> Debt-free: {debtFreeLabel}</span>
             ) : (
-              <span className="wall-meta">Add extra payments below to see a debt-free date</span>
+              <span className="wall-meta">Add extra payments on the Payoff Timeline tab to see a debt-free date</span>
             )}
           </div>
           <div className="wall-track">
@@ -609,6 +639,9 @@ function BillTracker({ saved, userId }) {
               {Object.entries(TIERS).map(([t, v]) => (
                 <span key={t}><span className="swatch" style={{ background: v.color }} />{v.label}</span>
               ))}
+              {paidDownSoFar > 0 && (
+                <span><span className="swatch" style={{ background: "#E4DCC5", border: "1px solid var(--line)" }} />Paid off already ({money(paidDownSoFar)})</span>
+              )}
             </div>
             <div className="wall-meta ctc-mono">{money(totalDebtBalance)} remaining</div>
           </div>
@@ -659,7 +692,11 @@ function BillTracker({ saved, userId }) {
             </div>
           )}
         </div>
+        </>
+        )}
 
+        {page === "budget" && (
+        <>
         {/* ---- income & DTI ---- */}
         <div className="ctc-section">
           <div className="ctc-section-head">
@@ -845,11 +882,15 @@ function BillTracker({ saved, userId }) {
                   <input type="number" value={recurringExtra} onChange={(e) => setRecurringExtra(Number(e.target.value))} />
                 </div>
               </div>
-              <div className="ctc-hint" style={{ marginTop: 6 }}>This feeds the debt-free projection below automatically. Add one-off boosts (bonuses, tax refunds) in the timeline section.</div>
+              <div className="ctc-hint" style={{ marginTop: 6 }}>This feeds the debt-free projection below automatically. Add one-off boosts (bonuses, tax refunds) on the Payoff Timeline tab.</div>
             </div>
           </div>
         </div>
+        </>
+        )}
 
+        {page === "timeline" && (
+        <>
         {/* ---- timeline ---- */}
         <div className="ctc-section">
           <div className="ctc-section-head">
@@ -890,7 +931,11 @@ function BillTracker({ saved, userId }) {
             </div>
           </div>
         </div>
+        </>
+        )}
 
+        {page === "paycheck" && (
+        <>
         {/* ---- paycheck plan ---- */}
         <div className="ctc-section">
           <div className="ctc-section-head">
@@ -950,7 +995,40 @@ function BillTracker({ saved, userId }) {
                 <div className="paycheck-row">
                   {paycheckPlan.paychecks.slice(0, 8).map((p) => (
                     <div className="paycheck-card" key={p.id}>
-                      <div className="paycheck-date">{fmtDate(p.date)}</div>
+                      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 6 }}>
+                        <div className="paycheck-date">{fmtDate(p.date)}</div>
+                        <button
+                          className="btn-ghost btn-sm"
+                          style={{ border: "none", padding: 2 }}
+                          title="Adjust this paycheck's date"
+                          onClick={() => setEditingPaycheckId(editingPaycheckId === p.id ? null : p.id)}
+                        >
+                          <Pencil size={12} />
+                        </button>
+                      </div>
+                      {editingPaycheckId === p.id && (
+                        <div style={{ background: "#F0E9D6", borderRadius: 3, padding: 8, marginBottom: 8, display: "flex", flexDirection: "column", gap: 6 }}>
+                          {p.sources.map((s, idx) => (
+                            <div key={idx} style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                              <span className="ctc-hint" style={{ flex: 1 }}>{s.sourceName}</span>
+                              <input
+                                type="date"
+                                defaultValue={isoDate(p.date)}
+                                style={{ fontSize: 11, padding: "2px 4px", border: "1px solid var(--line)", borderRadius: 3 }}
+                                onChange={(e) => overridePaycheckDate(s.sourceId, s.originalDate, e.target.value)}
+                              />
+                              <button
+                                className="btn-ghost btn-sm"
+                                style={{ border: "none", padding: 2, fontSize: 10 }}
+                                title="Reset to the regular schedule"
+                                onClick={() => overridePaycheckDate(s.sourceId, s.originalDate, null)}
+                              >
+                                Reset
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                      )}
                       <div className="paycheck-source">
                         {p.sources.length > 1
                           ? p.sources.map((s) => `${s.sourceName} ${money(s.amount)}`).join(" + ") + ` = ${money(p.amount)}`
@@ -975,14 +1053,18 @@ function BillTracker({ saved, userId }) {
                 {paycheckPlan.unscheduled.length > 0 && (
                   <div className="protected-note" style={{ marginTop: 14 }}>
                     Not shown above (no due date set yet): {paycheckPlan.unscheduled.map((b) => b.name).join(", ")}. Add a due day
-                    to each in the ledgers below to include them here.
+                    to each in the Debts / Fixed Expenses tabs to include them here.
                   </div>
                 )}
               </>
             )}
           </div>
         </div>
+        </>
+        )}
 
+        {page === "debts" && (
+        <>
         {/* ---- debts ledger ---- */}
         <div className="ctc-section">
           <div className="ctc-section-head">
@@ -1103,7 +1185,11 @@ function BillTracker({ saved, userId }) {
             </div>
           )}
         </div>
+        </>
+        )}
 
+        {page === "fixed" && (
+        <>
         {/* ---- fixed expenses ---- */}
         <div className="ctc-section">
           <div className="ctc-section-head">
@@ -1147,13 +1233,6 @@ function BillTracker({ saved, userId }) {
             </table>
           </div>
         </div>
-
-        <div className="footnote">
-          Balances shown as "—" haven't been entered yet. Interest accrues monthly only where you've set an APR — otherwise
-          minimum payments are treated as pure principal reduction. DTI reference bands (36% / 43%) are common general
-          guidelines, not a specific lender's requirement — actual qualifying DTI varies by loan program and lender. This
-          tool isn't financial or lending advice. Your data is saved to your account automatically as you go, and only visible when you're signed in.
-        </div>
         </>
         )}
 
@@ -1165,6 +1244,13 @@ function BillTracker({ saved, userId }) {
             setPaidByMonth={setPaidByMonth}
           />
         )}
+
+        <div className="footnote">
+          Balances shown as "—" haven't been entered yet. Interest accrues monthly only where you've set an APR — otherwise
+          minimum payments are treated as pure principal reduction. DTI reference bands (36% / 43%) are common general
+          guidelines, not a specific lender's requirement — actual qualifying DTI varies by loan program and lender. This
+          tool isn't financial or lending advice. Your data is saved to your account automatically as you go, and only visible when you're signed in.
+        </div>
       </div>
 
       {showAddDebt && <AddDebtModal onClose={() => setShowAddDebt(false)} onAdd={addDebt} />}
@@ -1259,7 +1345,7 @@ function MonthlyPlan({ debtBills, fixed, paidByMonth, setPaidByMonth }) {
       </div>
 
       {items.length === 0 && (
-        <div className="card"><div className="ctc-hint">No debts or fixed expenses yet — add some from the Dashboard tab.</div></div>
+        <div className="card"><div className="ctc-hint">No debts or fixed expenses yet — add some from the Debts or Fixed Expenses tabs.</div></div>
       )}
 
       {items.map((it) => {
