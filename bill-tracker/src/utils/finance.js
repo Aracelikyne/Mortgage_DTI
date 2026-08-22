@@ -402,13 +402,20 @@ export function buildPaycheckPlan(incomeSources, bills, horizonDays = 95, paidBy
   const today = new Date();
   today.setHours(0, 0, 0, 0);
 
+  // The paycheck a payment actually came from — the most recent one on or
+  // before the date it was paid. Returns null if the payment predates every
+  // paycheck we're tracking (paid before the earliest known payday): that
+  // money came from a paycheck outside this history, so it shouldn't
+  // attach to — and shouldn't reduce the balance of — the earliest one we
+  // do know about just because there's nothing earlier on record.
   function sourceCheckFor(paidDateStr) {
     const paidOn = paidDateStr ? new Date(paidDateStr + "T00:00:00") : today;
     const priorChecks = sortedPaychecksAsc.filter((p) => p.date <= paidOn);
-    return priorChecks.length ? priorChecks[priorChecks.length - 1] : sortedPaychecksAsc[0];
+    return priorChecks.length ? priorChecks[priorChecks.length - 1] : null;
   }
 
   function recordPaidItem(check, billId, name, amount, dueDate, deadline) {
+    if (!check) return; // paid before any known paycheck — not this plan's to show
     check.remaining -= amount;
     check.items.push({ billId, name, amount: Math.round(amount * 100) / 100, dueDate, deadline, split: false, paid: true });
   }
