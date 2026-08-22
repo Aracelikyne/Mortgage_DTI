@@ -17,6 +17,9 @@ dist-ssr
 .env.*
 !.env.example
 
+# personal data — real emails, not for the public repo
+supabase/allowlist.local.sql
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

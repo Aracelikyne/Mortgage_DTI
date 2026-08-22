@@ -14,6 +14,16 @@ import AddDebtModal from "./components/AddDebtModal";
 import AddFixedModal from "./components/AddFixedModal";
 import { supabase } from "./lib/supabaseClient";
 
+// One-time migration from the old localStorage-only version of the app.
+function readLegacyLocalState() {
+  try {
+    const raw = localStorage.getItem("bill-tracker-state");
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null;
+  }
+}
+
 export default function App() {
   const [session, setSession] = useState(undefined); // undefined = still checking, null = signed out
   const [saved, setSaved] = useState(null); // null until the row has been fetched
@@ -35,10 +45,31 @@ export default function App() {
       .select("data")
       .eq("user_id", session.user.id)
       .maybeSingle()
-      .then(({ data, error }) => {
+      .then(async ({ data, error }) => {
         if (cancelled) return;
         if (error) console.error(error);
-        setSaved(data?.data || {});
+
+        if (data?.data) {
+          setSaved(data.data);
+          return;
+        }
+
+        // No row in Supabase yet — check for data from the old localStorage-only
+        // version of this app, on this browser, and import it once so nothing
+        // has to be re-entered.
+        const legacy = readLegacyLocalState();
+        if (legacy && Object.keys(legacy).length > 0) {
+          const { error: upsertError } = await supabase.from("app_state").upsert({
+            user_id: session.user.id,
+            data: legacy,
+            updated_at: new Date().toISOString(),
+          });
+          if (upsertError) console.error(upsertError);
+          if (!cancelled) setSaved(legacy);
+          return;
+        }
+
+        setSaved({});
       });
     return () => { cancelled = true; };
   }, [session]);
