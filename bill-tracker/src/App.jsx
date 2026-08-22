@@ -97,7 +97,12 @@ function AuthScreen({ loading }) {
           <>
             <p style={{ color: "#5B6570", fontSize: 14, marginBottom: 18 }}>Sign in to see and edit your data.</p>
             <button
-              onClick={() => supabase.auth.signInWithOAuth({ provider: "github" })}
+              onClick={() =>
+                supabase.auth.signInWithOAuth({
+                  provider: "github",
+                  options: { redirectTo: window.location.origin + import.meta.env.BASE_URL },
+                })
+              }
               style={{
                 fontFamily: "Inter, sans-serif", fontWeight: 600, fontSize: 13.5, padding: "9px 16px",
                 borderRadius: 3, border: "1px solid #22282E", cursor: "pointer", background: "#22282E", color: "#ECE6D6",
