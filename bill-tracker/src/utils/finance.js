@@ -322,40 +322,48 @@ export function generateBillInstances(bills, horizonDays) {
   return instances;
 }
 
-// Assigns each bill instance to the paycheck(s) that fall within its billing cycle, splitting
-// across paychecks when a single check can't cover it. Greedy best-fit, processed most-urgent first.
+// Assigns each bill instance to the paycheck(s) that fall on or before its grace-period
+// deadline. Processed most-urgent (soonest deadline) first, so bills with little or no grace
+// claim capacity before bills that have room to slide to a later check. Within a bill's own
+// eligible window, the earliest check that can cover it in full is preferred — paid close to
+// its normal due date — and only slides to a later check (still within grace) when the earlier
+// ones are already spoken for. A bill only splits across multiple checks, or shows as a real
+// shortfall, if the full grace window's income genuinely isn't enough.
 export function buildPaycheckPlan(incomeSources, bills, horizonDays = 95) {
   const paychecks = generatePaychecks(incomeSources, horizonDays);
   const instances = generateBillInstances(bills, horizonDays);
   const unscheduled = bills.filter((b) => b.isDebt !== false && !b.dueDay && Number(b.monthly) > 0);
   const shortfalls = [];
+  const lateButInGrace = [];
 
   if (paychecks.length === 0) {
-    return { paychecks, unscheduled, shortfalls, noIncome: true };
+    return { paychecks, unscheduled, shortfalls, lateButInGrace, noIncome: true };
   }
 
-  for (const inst of instances) {
-    const windowStart = new Date(inst.deadline);
-    windowStart.setDate(windowStart.getDate() - 32);
-    let eligible = paychecks.filter((p) => p.date <= inst.deadline && p.date >= windowStart);
-    if (eligible.length === 0) {
-      const before = paychecks.filter((p) => p.date <= inst.deadline).sort((a, b) => b.date - a.date);
-      eligible = before.length ? [before[0]] : [paychecks[0]];
-    }
+  const sortedInstances = instances.slice().sort((a, b) => a.deadline - b.deadline);
 
-    eligible = eligible.slice().sort((a, b) => b.remaining - a.remaining);
-    const bestFit = eligible.find((p) => p.remaining >= inst.amount);
+  function flagIfLate(inst, paidDate) {
+    if (paidDate > inst.dueDate) {
+      lateButInGrace.push({ ...inst, paidDate, daysLate: Math.round((paidDate - inst.dueDate) / 86400000) });
+    }
+  }
+
+  for (const inst of sortedInstances) {
+    const eligible = paychecks.filter((p) => p.date <= inst.deadline).sort((a, b) => a.date - b.date);
+    const pool = eligible.length ? eligible : [paychecks[0]];
+
+    const bestFit = pool.find((p) => p.remaining >= inst.amount);
     if (bestFit) {
       bestFit.remaining -= inst.amount;
       bestFit.items.push({ billId: inst.billId, name: inst.name, amount: inst.amount, dueDate: inst.dueDate, deadline: inst.deadline, split: false });
+      flagIfLate(inst, bestFit.date);
       continue;
     }
 
-    // doesn't fit on any single check in the window — split across them, earliest first
-    eligible.sort((a, b) => a.date - b.date);
+    // No single check through the grace-period deadline covers it — split across the pool.
     let remainingToAssign = inst.amount;
     const parts = [];
-    for (const p of eligible) {
+    for (const p of pool) {
       if (remainingToAssign <= 0.005) break;
       const cap = Math.max(0, p.remaining);
       const amt = Math.min(cap, remainingToAssign);
@@ -365,15 +373,22 @@ export function buildPaycheckPlan(incomeSources, bills, horizonDays = 95) {
       remainingToAssign -= amt;
     }
     if (remainingToAssign > 0.5) {
-      const last = eligible[eligible.length - 1] || paychecks[paychecks.length - 1];
+      const last = pool[pool.length - 1];
       last.remaining -= remainingToAssign;
       parts.push({ p: last, amt: remainingToAssign });
-      shortfalls.push({ ...inst, reason: "income in this window may not fully cover this bill" });
+      shortfalls.push({ ...inst, reason: "income through this bill's grace-period deadline may not fully cover it" });
     }
+    const split = parts.length > 1;
+    let latestDate = inst.dueDate;
     parts.forEach((part, idx) => {
-      part.p.items.push({ billId: inst.billId, name: inst.name, amount: Math.round(part.amt * 100) / 100, dueDate: inst.dueDate, deadline: inst.deadline, split: true, splitLabel: `part ${idx + 1} of ${parts.length}` });
+      part.p.items.push({
+        billId: inst.billId, name: inst.name, amount: Math.round(part.amt * 100) / 100,
+        dueDate: inst.dueDate, deadline: inst.deadline, split, splitLabel: split ? `part ${idx + 1} of ${parts.length}` : undefined,
+      });
+      if (part.p.date > latestDate) latestDate = part.p.date;
     });
+    flagIfLate(inst, latestDate);
   }
 
-  return { paychecks, unscheduled, shortfalls, noIncome: false };
+  return { paychecks, unscheduled, shortfalls, lateButInGrace, noIncome: false };
 }

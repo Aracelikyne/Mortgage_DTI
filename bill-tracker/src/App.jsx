@@ -941,6 +941,12 @@ function BillTracker({ saved, userId }) {
                     this window may not be fully covered by income before it's due — {paycheckPlan.shortfalls.map((s) => s.name).join(", ")}.
                   </div>
                 )}
+                {paycheckPlan.lateButInGrace.length > 0 && (
+                  <div className="protected-note" style={{ marginBottom: 14 }}>
+                    <strong>Paid within grace, not by the due date:</strong>{" "}
+                    {paycheckPlan.lateButInGrace.map((l) => `${l.name} (${l.daysLate}d late)`).join(", ")}.
+                  </div>
+                )}
                 <div className="paycheck-row">
                   {paycheckPlan.paychecks.slice(0, 8).map((p) => (
                     <div className="paycheck-card" key={p.id}>
