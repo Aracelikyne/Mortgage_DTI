@@ -1,10 +1,10 @@
-import { useState, useMemo, useEffect, useRef } from "react";
+import { useState, useMemo, useEffect, useRef, useCallback } from "react";
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine
 } from "recharts";
 import {
-  Home, KeyRound, Lock, Plus, Trash2, ChevronDown, ChevronUp,
-  Wallet, TrendingDown, Sparkles, PiggyBank, Calendar, LogOut
+  Home, KeyRound, Lock, Plus, Trash2, ChevronDown, ChevronUp, ChevronLeft, ChevronRight,
+  Wallet, TrendingDown, Sparkles, PiggyBank, Calendar, LogOut, CheckCircle2, Circle
 } from "lucide-react";
 
 // Import your extracted logic and components
@@ -132,36 +132,70 @@ function BillTracker({ saved, userId }) {
     { id: nextId(), name: "Partner's paycheck", amount: "", nextPayDate: "", frequency: "biweekly" },
   ]);
   const [boosts, setBoosts] = useState(saved.boosts || []);
-  
+  const [paidByMonth, setPaidByMonth] = useState(saved.paidByMonth || {});
+  const [page, setPage] = useState("dashboard");
+
   const [extraAmount, setExtraAmount] = useState("");
   const [suggestion, setSuggestion] = useState(null);
   const [showAddDebt, setShowAddDebt] = useState(false);
   const [showAddFixed, setShowAddFixed] = useState(false);
   const [collapsedTiers, setCollapsedTiers] = useState({});
+  const [saveStatus, setSaveStatus] = useState("idle"); // idle | saving | saved | error
   const saveTimer = useRef(null);
 
   // ---- persistence ----
   const isFirstRender = useRef(true);
+  const latestState = useRef(null);
+  useEffect(() => {
+    latestState.current = { debts, fixed, income, netIncome, includeRent, recurringExtra, strategy, targetDTI, mortgageEstimate, incomeSources, boosts, paidByMonth };
+  });
+
+  const flushSave = useCallback(() => {
+    if (saveTimer.current) {
+      clearTimeout(saveTimer.current);
+      saveTimer.current = null;
+    }
+    setSaveStatus("saving");
+    supabase
+      .from("app_state")
+      .upsert({
+        user_id: userId,
+        data: latestState.current,
+        updated_at: new Date().toISOString(),
+      })
+      .then(({ error }) => {
+        setSaveStatus(error ? "error" : "saved");
+        if (error) console.error(error);
+      });
+  }, [userId]);
+
   useEffect(() => {
     if (isFirstRender.current) {
       isFirstRender.current = false;
       return;
     }
+    setSaveStatus("saving");
     if (saveTimer.current) clearTimeout(saveTimer.current);
-    saveTimer.current = setTimeout(() => {
-      supabase
-        .from("app_state")
-        .upsert({
-          user_id: userId,
-          data: { debts, fixed, income, netIncome, includeRent, recurringExtra, strategy, targetDTI, mortgageEstimate, incomeSources, boosts },
-          updated_at: new Date().toISOString(),
-        })
-        .then(({ error }) => {
-          if (error) console.error(error);
-        });
-    }, 700);
+    saveTimer.current = setTimeout(flushSave, 700);
     return () => clearTimeout(saveTimer.current);
-  }, [debts, fixed, income, netIncome, includeRent, recurringExtra, strategy, targetDTI, mortgageEstimate, incomeSources, boosts, userId]);
+  }, [debts, fixed, income, netIncome, includeRent, recurringExtra, strategy, targetDTI, mortgageEstimate, incomeSources, boosts, paidByMonth, flushSave]);
+
+  // Flush immediately when the tab is backgrounded/closed instead of losing a
+  // pending debounced save — visibilitychange fires reliably before teardown,
+  // unlike beforeunload.
+  useEffect(() => {
+    const handleHide = () => {
+      if (document.visibilityState === "hidden" && saveTimer.current) {
+        flushSave();
+      }
+    };
+    document.addEventListener("visibilitychange", handleHide);
+    window.addEventListener("pagehide", handleHide);
+    return () => {
+      document.removeEventListener("visibilitychange", handleHide);
+      window.removeEventListener("pagehide", handleHide);
+    };
+  }, [flushSave]);
 
   // ---- derived numbers ----
   const debtBills = debts.filter((d) => d.isDebt !== false);
@@ -508,8 +542,23 @@ function BillTracker({ saved, userId }) {
             <div className="ctc-eyebrow">Debt payoff & DTI tracker</div>
             <h1 className="ctc-title">Clear to Close</h1>
           </div>
-          <button className="btn btn-ghost btn-sm" onClick={() => supabase.auth.signOut()}><LogOut size={13} /> Sign out</button>
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <span className="ctc-hint" style={{ minWidth: 64, textAlign: "right" }}>
+              {saveStatus === "saving" && "Saving…"}
+              {saveStatus === "saved" && "Saved"}
+              {saveStatus === "error" && <span style={{ color: "var(--brick)" }}>Couldn't save</span>}
+            </span>
+            <button className="btn btn-ghost btn-sm" onClick={() => supabase.auth.signOut()}><LogOut size={13} /> Sign out</button>
+          </div>
         </div>
+
+        <div className="strategy-pills" style={{ marginTop: 10, marginBottom: 4 }}>
+          <button className={`pill ${page === "dashboard" ? "active" : ""}`} onClick={() => setPage("dashboard")}>Dashboard</button>
+          <button className={`pill ${page === "monthly" ? "active" : ""}`} onClick={() => setPage("monthly")}>Monthly plan</button>
+        </div>
+
+        {page === "dashboard" && (
+        <>
         <p className="ctc-sub">
           Every bill you owe, one dashboard, pointed at a mortgage-ready DTI. Add income, drop in extra
           money when you have it, and this recalculates your debt-free date on its own.
@@ -1061,10 +1110,116 @@ function BillTracker({ saved, userId }) {
           guidelines, not a specific lender's requirement — actual qualifying DTI varies by loan program and lender. This
           tool isn't financial or lending advice. Your data is saved to your account automatically as you go, and only visible when you're signed in.
         </div>
+        </>
+        )}
+
+        {page === "monthly" && (
+          <MonthlyPlan
+            debtBills={debtBills}
+            fixed={fixed}
+            paidByMonth={paidByMonth}
+            setPaidByMonth={setPaidByMonth}
+          />
+        )}
       </div>
 
       {showAddDebt && <AddDebtModal onClose={() => setShowAddDebt(false)} onAdd={addDebt} />}
       {showAddFixed && <AddFixedModal onClose={() => setShowAddFixed(false)} onAdd={addFixed} />}
+    </div>
+  );
+}
+
+function monthKeyOf(date) {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
+}
+
+function ordinal(n) {
+  const s = ["th", "st", "nd", "rd"];
+  const v = n % 100;
+  return n + (s[(v - 20) % 10] || s[v] || s[0]);
+}
+
+function MonthlyPlan({ debtBills, fixed, paidByMonth, setPaidByMonth }) {
+  const [viewDate, setViewDate] = useState(() => new Date());
+  const monthKey = monthKeyOf(viewDate);
+  const paidSet = paidByMonth[monthKey] || {};
+
+  const items = [
+    ...debtBills.map((d) => ({ id: d.id, name: d.name, monthly: d.monthly, dueDay: d.dueDay })),
+    ...fixed.map((f) => ({ id: f.id, name: f.name, monthly: f.monthly, dueDay: f.dueDay })),
+  ].sort((a, b) => {
+    if (a.dueDay == null && b.dueDay == null) return a.name.localeCompare(b.name);
+    if (a.dueDay == null) return 1;
+    if (b.dueDay == null) return -1;
+    return a.dueDay - b.dueDay;
+  });
+
+  const totalMonthly = items.reduce((s, it) => s + Number(it.monthly || 0), 0);
+  const paidTotal = items.reduce((s, it) => s + (paidSet[it.id] ? Number(it.monthly || 0) : 0), 0);
+  const remaining = totalMonthly - paidTotal;
+  const progressPct = totalMonthly > 0 ? (paidTotal / totalMonthly) * 100 : 0;
+  const paidCount = items.filter((it) => paidSet[it.id]).length;
+
+  function togglePaid(id) {
+    setPaidByMonth((prev) => {
+      const monthEntry = prev[monthKey] || {};
+      return { ...prev, [monthKey]: { ...monthEntry, [id]: !monthEntry[id] } };
+    });
+  }
+
+  function shiftMonth(delta) {
+    setViewDate((d) => new Date(d.getFullYear(), d.getMonth() + delta, 1));
+  }
+
+  const monthLabelText = viewDate.toLocaleDateString("en-US", { month: "long", year: "numeric" });
+  const isCurrentMonth = monthKeyOf(new Date()) === monthKey;
+
+  return (
+    <div style={{ marginTop: 4 }}>
+      <div className="ctc-section-head" style={{ marginTop: 18 }}>
+        <div className="ctc-h2"><Calendar size={18} /> Monthly plan</div>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <button className="btn-ghost btn-sm" style={{ border: "1px solid var(--line)" }} onClick={() => shiftMonth(-1)}><ChevronLeft size={15} /></button>
+          <span className="ctc-mono" style={{ minWidth: 130, textAlign: "center", fontWeight: 600 }}>{monthLabelText}</span>
+          <button className="btn-ghost btn-sm" style={{ border: "1px solid var(--line)" }} onClick={() => shiftMonth(1)}><ChevronRight size={15} /></button>
+          {!isCurrentMonth && (
+            <button className="btn btn-ghost btn-sm" onClick={() => setViewDate(new Date())}>Today</button>
+          )}
+        </div>
+      </div>
+
+      <div className="card" style={{ marginBottom: 16 }}>
+        <div className="wall-head" style={{ marginBottom: 8 }}>
+          <span className="wall-title">{paidCount} of {items.length} paid</span>
+          <span className="wall-meta ctc-mono">{money(remaining)} remaining of {money(totalMonthly)}</span>
+        </div>
+        <div className="wall-track">
+          <div className="wall-seg" style={{ width: `${progressPct}%`, background: "var(--pine)" }} />
+        </div>
+      </div>
+
+      {items.length === 0 && (
+        <div className="card"><div className="ctc-hint">No debts or fixed expenses yet — add some from the Dashboard tab.</div></div>
+      )}
+
+      {items.map((it) => {
+        const paid = !!paidSet[it.id];
+        return (
+          <div
+            key={it.id}
+            className="card"
+            style={{ marginBottom: 8, display: "flex", alignItems: "center", gap: 12, cursor: "pointer", opacity: paid ? 0.6 : 1 }}
+            onClick={() => togglePaid(it.id)}
+          >
+            {paid ? <CheckCircle2 size={20} color="var(--pine-deep)" /> : <Circle size={20} color="var(--line)" />}
+            <div style={{ flex: 1 }}>
+              <div style={{ fontWeight: 600, fontSize: 14, textDecoration: paid ? "line-through" : "none" }}>{it.name}</div>
+              {it.dueDay != null && <div className="ctc-hint">Due the {ordinal(it.dueDay)}</div>}
+            </div>
+            <div className="ctc-mono" style={{ fontWeight: 600 }}>{money(it.monthly)}</div>
+          </div>
+        );
+      })}
     </div>
   );
 }
