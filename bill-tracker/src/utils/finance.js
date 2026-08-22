@@ -313,7 +313,7 @@ export function generateBillInstances(bills, horizonDays) {
       const deadline = new Date(dd);
       deadline.setDate(deadline.getDate() + Number(b.graceDays || 0));
       if (deadline >= today && dd <= horizonEnd) {
-        instances.push({ billId: b.id, name: b.name, amount: Number(b.monthly || 0), dueDate: dd, deadline, graceDays: Number(b.graceDays || 0) });
+        instances.push({ billId: b.id, name: b.name, amount: Number(b.monthly || 0), dueDate: dd, deadline, graceDays: Number(b.graceDays || 0), splitFriendly: !!b.splitFriendly });
       }
       cursor.setMonth(cursor.getMonth() + 1);
     }
@@ -329,6 +329,11 @@ export function generateBillInstances(bills, horizonDays) {
 // its normal due date — and only slides to a later check (still within grace) when the earlier
 // ones are already spoken for. A bill only splits across multiple checks, or shows as a real
 // shortfall, if the full grace window's income genuinely isn't enough.
+//
+// Bills marked "split OK" skip that whole-check-first competition: they're divided evenly
+// across every paycheck in their grace window right away (in half, thirds, however many
+// checks are eligible), since paying them that way has no real downside for the user — this
+// frees up whole-check capacity for bills that genuinely need to land on a single check.
 export function buildPaycheckPlan(incomeSources, bills, horizonDays = 95) {
   const paychecks = generatePaychecks(incomeSources, horizonDays);
   const instances = generateBillInstances(bills, horizonDays);
@@ -340,24 +345,19 @@ export function buildPaycheckPlan(incomeSources, bills, horizonDays = 95) {
     return { paychecks, unscheduled, shortfalls, lateButInGrace, noIncome: true };
   }
 
-  const sortedInstances = instances.slice().sort((a, b) => a.deadline - b.deadline);
-
   function flagIfLate(inst, paidDate) {
     if (paidDate > inst.dueDate) {
       lateButInGrace.push({ ...inst, paidDate, daysLate: Math.round((paidDate - inst.dueDate) / 86400000) });
     }
   }
 
-  for (const inst of sortedInstances) {
-    const eligible = paychecks.filter((p) => p.date <= inst.deadline).sort((a, b) => a.date - b.date);
-    const pool = eligible.length ? eligible : [paychecks[0]];
-
+  function assignWholeOrSplit(inst, pool) {
     const bestFit = pool.find((p) => p.remaining >= inst.amount);
     if (bestFit) {
       bestFit.remaining -= inst.amount;
       bestFit.items.push({ billId: inst.billId, name: inst.name, amount: inst.amount, dueDate: inst.dueDate, deadline: inst.deadline, split: false });
       flagIfLate(inst, bestFit.date);
-      continue;
+      return;
     }
 
     // No single check through the grace-period deadline covers it — split across the pool.
@@ -388,6 +388,55 @@ export function buildPaycheckPlan(incomeSources, bills, horizonDays = 95) {
       if (part.p.date > latestDate) latestDate = part.p.date;
     });
     flagIfLate(inst, latestDate);
+  }
+
+  function assignEvenSplit(inst, pool) {
+    const share = inst.amount / pool.length;
+    let shortBy = 0;
+    let latestDate = inst.dueDate;
+    const addedItems = [];
+    pool.forEach((p, idx) => {
+      const cap = Math.max(0, p.remaining);
+      const amt = Math.min(cap, share);
+      shortBy += share - amt;
+      p.remaining -= amt;
+      if (amt > 0.005) {
+        const item = {
+          billId: inst.billId, name: inst.name, amount: Math.round(amt * 100) / 100,
+          dueDate: inst.dueDate, deadline: inst.deadline, split: pool.length > 1, splitLabel: pool.length > 1 ? `part ${idx + 1} of ${pool.length}` : undefined,
+        };
+        p.items.push(item);
+        addedItems.push(item);
+        if (p.date > latestDate) latestDate = p.date;
+      }
+    });
+    if (shortBy > 0.5) {
+      const last = pool[pool.length - 1];
+      last.remaining -= shortBy;
+      const lastItem = addedItems[addedItems.length - 1];
+      if (lastItem) lastItem.amount = Math.round((lastItem.amount + shortBy) * 100) / 100;
+      shortfalls.push({ ...inst, reason: "income through this bill's grace-period deadline may not fully cover it, even split evenly" });
+    }
+    flagIfLate(inst, latestDate);
+  }
+
+  const sortedInstances = instances.slice().sort((a, b) => a.deadline - b.deadline);
+  for (const inst of sortedInstances) {
+    // Bounded to this bill's own cycle: from the single most recent paycheck
+    // on or before its due date (so a check landing a few days early can
+    // still cover it) through its grace-period deadline. This stops a later
+    // month's instance of the same recurring bill from reaching further back
+    // and re-claiming an earlier paycheck that already belongs to an earlier
+    // cycle's bills.
+    const priorChecks = paychecks.filter((p) => p.date <= inst.dueDate);
+    const windowStart = priorChecks.length ? priorChecks[priorChecks.length - 1].date : inst.dueDate;
+    const eligible = paychecks.filter((p) => p.date >= windowStart && p.date <= inst.deadline).sort((a, b) => a.date - b.date);
+    const pool = eligible.length ? eligible : [paychecks[0]];
+    if (inst.splitFriendly) {
+      assignEvenSplit(inst, pool);
+    } else {
+      assignWholeOrSplit(inst, pool);
+    }
   }
 
   return { paychecks, unscheduled, shortfalls, lateButInGrace, noIncome: false };

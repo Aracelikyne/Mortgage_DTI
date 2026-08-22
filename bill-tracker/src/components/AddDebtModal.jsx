@@ -3,7 +3,7 @@ import { X } from "lucide-react";
 import { CATEGORY_OPTIONS } from "../data/constants";
 
 export default function AddDebtModal({ onClose, onAdd }) {
-  const [form, setForm] = useState({ name: "", type: "Credit Card", monthly: "", balance: "", apr: "", dueDay: "", graceDays: "0", priority: 2, protectedFlag: false });
+  const [form, setForm] = useState({ name: "", type: "Credit Card", monthly: "", balance: "", apr: "", dueDay: "", graceDays: "0", priority: 2, protectedFlag: false, splitFriendly: false });
   const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
   
   return (
@@ -58,6 +58,10 @@ export default function AddDebtModal({ onClose, onAdd }) {
           <input type="checkbox" id="prot" checked={form.protectedFlag} onChange={(e) => set("protectedFlag", e.target.checked)} />
           <label htmlFor="prot">Minimum only, forever — never target with extra payments</label>
         </div>
+        <div className="toggle-row">
+          <input type="checkbox" id="splitok" checked={form.splitFriendly} onChange={(e) => set("splitFriendly", e.target.checked)} />
+          <label htmlFor="splitok">OK to split across this month's paychecks with no real downside</label>
+        </div>
         <div className="modal-foot">
           <button className="btn btn-ghost" onClick={onClose}>Cancel</button>
           <button
@@ -75,6 +79,7 @@ export default function AddDebtModal({ onClose, onAdd }) {
                 priority: form.protectedFlag ? null : form.priority,
                 protected: form.protectedFlag,
                 excludeFromGoal: form.protectedFlag,
+                splitFriendly: form.splitFriendly,
               });
             }}
           >

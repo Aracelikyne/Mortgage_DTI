@@ -3,7 +3,7 @@ import { X } from "lucide-react";
 import { FIXED_CATEGORY_OPTIONS } from "../data/constants";
 
 export default function AddFixedModal({ onClose, onAdd }) {
-  const [form, setForm] = useState({ name: "", type: "Utility", monthly: "", note: "", dueDay: "", graceDays: "0" });
+  const [form, setForm] = useState({ name: "", type: "Utility", monthly: "", note: "", dueDay: "", graceDays: "0", splitFriendly: false });
   const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
   
   return (
@@ -41,6 +41,10 @@ export default function AddFixedModal({ onClose, onAdd }) {
             <input value={form.note} onChange={(e) => set("note", e.target.value)} />
           </div>
         </div>
+        <div className="toggle-row">
+          <input type="checkbox" id="splitok" checked={form.splitFriendly} onChange={(e) => set("splitFriendly", e.target.checked)} />
+          <label htmlFor="splitok">OK to split across this month's paychecks with no real downside</label>
+        </div>
         <div className="modal-foot">
           <button className="btn btn-ghost" onClick={onClose}>Cancel</button>
           <button
@@ -54,6 +58,7 @@ export default function AddFixedModal({ onClose, onAdd }) {
                 note: form.note,
                 dueDay: form.dueDay === "" ? null : Number(form.dueDay),
                 graceDays: form.graceDays === "" ? 0 : Number(form.graceDays),
+                splitFriendly: form.splitFriendly,
               });
             }}
           >

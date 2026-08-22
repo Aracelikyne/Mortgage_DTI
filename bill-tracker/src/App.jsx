@@ -248,8 +248,8 @@ function BillTracker({ saved, userId }) {
 
   const paycheckPlan = useMemo(() => {
     const billsForPlan = [
-      ...debts.filter((d) => d.isDebt !== false).map((d) => ({ id: d.id, name: d.name, monthly: d.monthly, dueDay: d.dueDay, graceDays: d.graceDays })),
-      ...fixed.map((f) => ({ id: f.id, name: f.name, monthly: f.monthly, dueDay: f.dueDay, graceDays: f.graceDays })),
+      ...debts.filter((d) => d.isDebt !== false).map((d) => ({ id: d.id, name: d.name, monthly: d.monthly, dueDay: d.dueDay, graceDays: d.graceDays, splitFriendly: d.splitFriendly })),
+      ...fixed.map((f) => ({ id: f.id, name: f.name, monthly: f.monthly, dueDay: f.dueDay, graceDays: f.graceDays, splitFriendly: f.splitFriendly })),
     ];
     return buildPaycheckPlan(incomeSources, billsForPlan, 95);
   }, [incomeSources, debts, fixed]);
@@ -1015,6 +1015,7 @@ function BillTracker({ saved, userId }) {
                         <th style={{ width: "10%" }}>Due day</th>
                         <th style={{ width: "8%" }} title="Days after due date before it's actually late">Grace</th>
                         <th style={{ width: "9%" }} title="Counts toward your debt-free projection">Goal</th>
+                        <th style={{ width: "8%" }} title="OK to split across this month's paychecks with no real downside">Split OK</th>
                         <th style={{ width: 30 }}></th>
                       </tr>
                     </thead>
@@ -1034,6 +1035,9 @@ function BillTracker({ saved, userId }) {
                           <td><input type="number" min="0" placeholder="0" value={d.graceDays ?? 0} onChange={(e) => updateDebt(d.id, { graceDays: e.target.value === "" ? 0 : Number(e.target.value) })} /></td>
                           <td style={{ textAlign: "center" }}>
                             <input type="checkbox" checked={!d.excludeFromGoal} onChange={(e) => updateDebt(d.id, { excludeFromGoal: !e.target.checked })} title="Include in the projected debt-free date" />
+                          </td>
+                          <td style={{ textAlign: "center" }}>
+                            <input type="checkbox" checked={!!d.splitFriendly} onChange={(e) => updateDebt(d.id, { splitFriendly: e.target.checked })} title="OK to split across this month's paychecks with no real downside" />
                           </td>
                           <td><button className="btn-ghost btn-sm" style={{ border: "none" }} onClick={() => removeDebt(d.id)}><Trash2 size={14} color="#A5473A" /></button></td>
                         </tr>
@@ -1065,6 +1069,7 @@ function BillTracker({ saved, userId }) {
                         <th style={{ width: "10%" }}>Due day</th>
                         <th style={{ width: "8%" }}>Grace</th>
                         <th style={{ width: "9%" }} title="Counts toward your debt-free projection">Goal</th>
+                        <th style={{ width: "8%" }} title="OK to split across this month's paychecks with no real downside">Split OK</th>
                         <th style={{ width: 30 }}></th>
                       </tr>
                     </thead>
@@ -1083,6 +1088,9 @@ function BillTracker({ saved, userId }) {
                           <td><input type="number" min="0" placeholder="0" value={d.graceDays ?? 0} onChange={(e) => updateDebt(d.id, { graceDays: e.target.value === "" ? 0 : Number(e.target.value) })} /></td>
                           <td style={{ textAlign: "center" }}>
                             <input type="checkbox" checked={!d.excludeFromGoal} onChange={(e) => updateDebt(d.id, { excludeFromGoal: !e.target.checked })} title="Include in the projected debt-free date" />
+                          </td>
+                          <td style={{ textAlign: "center" }}>
+                            <input type="checkbox" checked={!!d.splitFriendly} onChange={(e) => updateDebt(d.id, { splitFriendly: e.target.checked })} title="OK to split across this month's paychecks with no real downside" />
                           </td>
                           <td><button className="btn-ghost btn-sm" style={{ border: "none" }} onClick={() => removeDebt(d.id)}><Trash2 size={14} color="#A5473A" /></button></td>
                         </tr>
@@ -1111,6 +1119,7 @@ function BillTracker({ saved, userId }) {
                   <th>Monthly</th>
                   <th style={{ width: "10%" }}>Due day</th>
                   <th style={{ width: "8%" }}>Grace</th>
+                  <th style={{ width: "8%" }} title="OK to split across this month's paychecks with no real downside">Split OK</th>
                   <th>Note</th>
                   <th style={{ width: 30 }}></th>
                 </tr>
@@ -1127,6 +1136,9 @@ function BillTracker({ saved, userId }) {
                     <td><input type="number" value={f.monthly} onChange={(e) => updateFixed(f.id, { monthly: Number(e.target.value) })} /></td>
                     <td><input type="number" min="1" max="31" placeholder="—" value={f.dueDay ?? ""} onChange={(e) => updateFixed(f.id, { dueDay: e.target.value === "" ? null : Number(e.target.value) })} /></td>
                     <td><input type="number" min="0" placeholder="0" value={f.graceDays ?? 0} onChange={(e) => updateFixed(f.id, { graceDays: e.target.value === "" ? 0 : Number(e.target.value) })} /></td>
+                    <td style={{ textAlign: "center" }}>
+                      <input type="checkbox" checked={!!f.splitFriendly} onChange={(e) => updateFixed(f.id, { splitFriendly: e.target.checked })} title="OK to split across this month's paychecks with no real downside" />
+                    </td>
                     <td><input value={f.note} placeholder="—" onChange={(e) => updateFixed(f.id, { note: e.target.value })} /></td>
                     <td><button className="btn-ghost btn-sm" style={{ border: "none" }} onClick={() => removeFixed(f.id)}><Trash2 size={14} color="#A5473A" /></button></td>
                   </tr>
@@ -1171,10 +1183,24 @@ function ordinal(n) {
   return n + (s[(v - 20) % 10] || s[v] || s[0]);
 }
 
+// Normalizes a stored payment record for one bill in one month. Older saved
+// data stored a plain `true`/`false` here (from before partial payments and
+// bank-clearing existed) — read as fully paid / not paid so nothing breaks.
+function getPaymentRecord(monthEntry, item) {
+  const raw = monthEntry[item.id];
+  if (raw && typeof raw === "object") {
+    return { amountPaid: Number(raw.amountPaid) || 0, cleared: !!raw.cleared, bank: raw.bank || "" };
+  }
+  if (raw === true) {
+    return { amountPaid: Number(item.monthly) || 0, cleared: false, bank: "" };
+  }
+  return { amountPaid: 0, cleared: false, bank: "" };
+}
+
 function MonthlyPlan({ debtBills, fixed, paidByMonth, setPaidByMonth }) {
   const [viewDate, setViewDate] = useState(() => new Date());
   const monthKey = monthKeyOf(viewDate);
-  const paidSet = paidByMonth[monthKey] || {};
+  const monthEntry = paidByMonth[monthKey] || {};
 
   const items = [
     ...debtBills.map((d) => ({ id: d.id, name: d.name, monthly: d.monthly, dueDay: d.dueDay })),
@@ -1187,16 +1213,29 @@ function MonthlyPlan({ debtBills, fixed, paidByMonth, setPaidByMonth }) {
   });
 
   const totalMonthly = items.reduce((s, it) => s + Number(it.monthly || 0), 0);
-  const paidTotal = items.reduce((s, it) => s + (paidSet[it.id] ? Number(it.monthly || 0) : 0), 0);
+  const paidTotal = items.reduce((s, it) => {
+    const rec = getPaymentRecord(monthEntry, it);
+    return s + Math.min(rec.amountPaid, Number(it.monthly || 0));
+  }, 0);
   const remaining = totalMonthly - paidTotal;
   const progressPct = totalMonthly > 0 ? (paidTotal / totalMonthly) * 100 : 0;
-  const paidCount = items.filter((it) => paidSet[it.id]).length;
+  const fullyPaidCount = items.filter((it) => {
+    const rec = getPaymentRecord(monthEntry, it);
+    return Number(it.monthly || 0) > 0 && rec.amountPaid >= Number(it.monthly || 0);
+  }).length;
 
-  function togglePaid(id) {
+  function updateRecord(item, patch) {
     setPaidByMonth((prev) => {
-      const monthEntry = prev[monthKey] || {};
-      return { ...prev, [monthKey]: { ...monthEntry, [id]: !monthEntry[id] } };
+      const entry = prev[monthKey] || {};
+      const current = getPaymentRecord(entry, item);
+      return { ...prev, [monthKey]: { ...entry, [item.id]: { ...current, ...patch } } };
     });
+  }
+
+  function toggleFullyPaid(item) {
+    const rec = getPaymentRecord(monthEntry, item);
+    const monthly = Number(item.monthly || 0);
+    updateRecord(item, { amountPaid: rec.amountPaid >= monthly ? 0 : monthly });
   }
 
   function shiftMonth(delta) {
@@ -1222,7 +1261,7 @@ function MonthlyPlan({ debtBills, fixed, paidByMonth, setPaidByMonth }) {
 
       <div className="card" style={{ marginBottom: 16 }}>
         <div className="wall-head" style={{ marginBottom: 8 }}>
-          <span className="wall-title">{paidCount} of {items.length} paid</span>
+          <span className="wall-title">{fullyPaidCount} of {items.length} fully paid</span>
           <span className="wall-meta ctc-mono">{money(remaining)} remaining of {money(totalMonthly)}</span>
         </div>
         <div className="wall-track">
@@ -1235,20 +1274,57 @@ function MonthlyPlan({ debtBills, fixed, paidByMonth, setPaidByMonth }) {
       )}
 
       {items.map((it) => {
-        const paid = !!paidSet[it.id];
+        const monthly = Number(it.monthly || 0);
+        const rec = getPaymentRecord(monthEntry, it);
+        const fullyPaid = monthly > 0 && rec.amountPaid >= monthly;
+        const partial = rec.amountPaid > 0 && !fullyPaid;
+        const billRemaining = Math.max(0, monthly - rec.amountPaid);
+
+        let icon;
+        if (fullyPaid) icon = <CheckCircle2 size={20} color="var(--pine-deep)" />;
+        else if (partial) icon = <Circle size={20} color="var(--brass-deep)" fill="var(--brass-deep)" fillOpacity={0.25} />;
+        else icon = <Circle size={20} color="var(--line)" />;
+
         return (
-          <div
-            key={it.id}
-            className="card"
-            style={{ marginBottom: 8, display: "flex", alignItems: "center", gap: 12, cursor: "pointer", opacity: paid ? 0.6 : 1 }}
-            onClick={() => togglePaid(it.id)}
-          >
-            {paid ? <CheckCircle2 size={20} color="var(--pine-deep)" /> : <Circle size={20} color="var(--line)" />}
-            <div style={{ flex: 1 }}>
-              <div style={{ fontWeight: 600, fontSize: 14, textDecoration: paid ? "line-through" : "none" }}>{it.name}</div>
-              {it.dueDay != null && <div className="ctc-hint">Due the {ordinal(it.dueDay)}</div>}
+          <div key={it.id} className="card" style={{ marginBottom: 8, opacity: fullyPaid ? 0.7 : 1 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+              <button
+                className="btn-ghost btn-sm"
+                style={{ border: "none", padding: 0 }}
+                onClick={() => toggleFullyPaid(it)}
+                title={fullyPaid ? "Mark unpaid" : "Mark fully paid"}
+              >
+                {icon}
+              </button>
+              <div style={{ flex: 1 }}>
+                <div style={{ fontWeight: 600, fontSize: 14, textDecoration: fullyPaid ? "line-through" : "none" }}>{it.name}</div>
+                {it.dueDay != null && <div className="ctc-hint">Due the {ordinal(it.dueDay)}</div>}
+                {partial && <div className="ctc-hint" style={{ color: "var(--brass-deep)", fontWeight: 600 }}>Partial — {money(billRemaining)} remaining</div>}
+              </div>
+              <div style={{ textAlign: "right" }}>
+                <input
+                  type="number"
+                  className="ctc-mono"
+                  value={rec.amountPaid || ""}
+                  placeholder="0"
+                  onChange={(e) => updateRecord(it, { amountPaid: e.target.value === "" ? 0 : Number(e.target.value) })}
+                  style={{ width: 90, textAlign: "right", border: "1px solid var(--line)", borderRadius: 3, padding: "4px 6px", fontSize: 13 }}
+                />
+                <div className="ctc-hint" style={{ marginTop: 2 }}>of {money(monthly)}</div>
+              </div>
             </div>
-            <div className="ctc-mono" style={{ fontWeight: 600 }}>{money(it.monthly)}</div>
+            <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 10, paddingTop: 10, borderTop: "1px dashed var(--line)" }}>
+              <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12.5, color: "var(--ink-soft)" }}>
+                <input type="checkbox" checked={rec.cleared} onChange={(e) => updateRecord(it, { cleared: e.target.checked })} />
+                Cleared the bank
+              </label>
+              <input
+                value={rec.bank}
+                onChange={(e) => updateRecord(it, { bank: e.target.value })}
+                placeholder="Which bank/account"
+                style={{ flex: 1, border: "1px solid var(--line)", borderRadius: 3, padding: "5px 8px", fontSize: 12.5, fontFamily: "Inter, sans-serif" }}
+              />
+            </div>
           </div>
         );
       })}
