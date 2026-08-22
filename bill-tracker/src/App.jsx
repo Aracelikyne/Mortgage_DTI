@@ -9,7 +9,7 @@ import {
 
 // Import your extracted logic and components
 import { CATEGORY_OPTIONS, FIXED_CATEGORY_OPTIONS, TIERS, initialDebts, initialFixed, nextId } from "./data/constants";
-import { allocateExtra, allocateMaxCashFlow, buildPaycheckPlan, fastestStrategyForBoost, minimumAdjustedDebts, money, monthLabel, monthLabelFull, pct, simulatePayoff, fmtDate } from "./utils/finance";
+import { allocateExtra, allocateMaxCashFlow, buildPaycheckPlan, fastestStrategyForBoost, minimumAdjustedDebts, money, monthLabel, monthLabelFull, pct, simulatePayoff, fmtDate, monthKeyOf, getPaymentRecord, isoDate } from "./utils/finance";
 import AddDebtModal from "./components/AddDebtModal";
 import AddFixedModal from "./components/AddFixedModal";
 import { supabase } from "./lib/supabaseClient";
@@ -251,8 +251,8 @@ function BillTracker({ saved, userId }) {
       ...debts.filter((d) => d.isDebt !== false).map((d) => ({ id: d.id, name: d.name, monthly: d.monthly, dueDay: d.dueDay, graceDays: d.graceDays, splitFriendly: d.splitFriendly })),
       ...fixed.map((f) => ({ id: f.id, name: f.name, monthly: f.monthly, dueDay: f.dueDay, graceDays: f.graceDays, splitFriendly: f.splitFriendly })),
     ];
-    return buildPaycheckPlan(incomeSources, billsForPlan, 95);
-  }, [incomeSources, debts, fixed]);
+    return buildPaycheckPlan(incomeSources, billsForPlan, 95, paidByMonth);
+  }, [incomeSources, debts, fixed, paidByMonth]);
 
 
   // chart sampling
@@ -1173,28 +1173,10 @@ function BillTracker({ saved, userId }) {
   );
 }
 
-function monthKeyOf(date) {
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
-}
-
 function ordinal(n) {
   const s = ["th", "st", "nd", "rd"];
   const v = n % 100;
   return n + (s[(v - 20) % 10] || s[v] || s[0]);
-}
-
-// Normalizes a stored payment record for one bill in one month. Older saved
-// data stored a plain `true`/`false` here (from before partial payments and
-// bank-clearing existed) — read as fully paid / not paid so nothing breaks.
-function getPaymentRecord(monthEntry, item) {
-  const raw = monthEntry[item.id];
-  if (raw && typeof raw === "object") {
-    return { amountPaid: Number(raw.amountPaid) || 0, cleared: !!raw.cleared, bank: raw.bank || "" };
-  }
-  if (raw === true) {
-    return { amountPaid: Number(item.monthly) || 0, cleared: false, bank: "" };
-  }
-  return { amountPaid: 0, cleared: false, bank: "" };
 }
 
 function MonthlyPlan({ debtBills, fixed, paidByMonth, setPaidByMonth }) {
@@ -1228,7 +1210,14 @@ function MonthlyPlan({ debtBills, fixed, paidByMonth, setPaidByMonth }) {
     setPaidByMonth((prev) => {
       const entry = prev[monthKey] || {};
       const current = getPaymentRecord(entry, item);
-      return { ...prev, [monthKey]: { ...entry, [item.id]: { ...current, ...patch } } };
+      const next = { ...current, ...patch };
+      // Auto-stamp today's date the moment a payment first shows up, so the
+      // paycheck plan knows which check it actually came from without extra
+      // clicks — still editable afterward for backdating.
+      if (patch.amountPaid !== undefined && patch.paidDate === undefined) {
+        next.paidDate = patch.amountPaid > 0 ? (current.paidDate || isoDate(new Date())) : null;
+      }
+      return { ...prev, [monthKey]: { ...entry, [item.id]: next } };
     });
   }
 
@@ -1313,7 +1302,7 @@ function MonthlyPlan({ debtBills, fixed, paidByMonth, setPaidByMonth }) {
                 <div className="ctc-hint" style={{ marginTop: 2 }}>of {money(monthly)}</div>
               </div>
             </div>
-            <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 10, paddingTop: 10, borderTop: "1px dashed var(--line)" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 10, paddingTop: 10, borderTop: "1px dashed var(--line)", flexWrap: "wrap" }}>
               <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12.5, color: "var(--ink-soft)" }}>
                 <input type="checkbox" checked={rec.cleared} onChange={(e) => updateRecord(it, { cleared: e.target.checked })} />
                 Cleared the bank
@@ -1322,8 +1311,19 @@ function MonthlyPlan({ debtBills, fixed, paidByMonth, setPaidByMonth }) {
                 value={rec.bank}
                 onChange={(e) => updateRecord(it, { bank: e.target.value })}
                 placeholder="Which bank/account"
-                style={{ flex: 1, border: "1px solid var(--line)", borderRadius: 3, padding: "5px 8px", fontSize: 12.5, fontFamily: "Inter, sans-serif" }}
+                style={{ flex: 1, minWidth: 120, border: "1px solid var(--line)", borderRadius: 3, padding: "5px 8px", fontSize: 12.5, fontFamily: "Inter, sans-serif" }}
               />
+              {rec.amountPaid > 0 && (
+                <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12.5, color: "var(--ink-soft)" }}>
+                  Paid on
+                  <input
+                    type="date"
+                    value={rec.paidDate || ""}
+                    onChange={(e) => updateRecord(it, { paidDate: e.target.value || null })}
+                    style={{ border: "1px solid var(--line)", borderRadius: 3, padding: "4px 6px", fontSize: 12.5, fontFamily: "Inter, sans-serif" }}
+                  />
+                </label>
+              )}
             </div>
           </div>
         );

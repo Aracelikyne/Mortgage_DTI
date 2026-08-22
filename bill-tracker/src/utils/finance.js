@@ -242,6 +242,25 @@ export function isoDate(d) {
   return d.toISOString().slice(0, 10);
 }
 
+export function monthKeyOf(date) {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
+}
+
+// Normalizes a stored Monthly Plan payment record for one bill in one
+// month. Older saved data stored a plain `true`/`false` here (from before
+// partial payments existed) — read as fully paid / not paid so nothing
+// breaks.
+export function getPaymentRecord(monthEntry, item) {
+  const raw = (monthEntry || {})[item.id];
+  if (raw && typeof raw === "object") {
+    return { amountPaid: Number(raw.amountPaid) || 0, cleared: !!raw.cleared, bank: raw.bank || "", paidDate: raw.paidDate || null };
+  }
+  if (raw === true) {
+    return { amountPaid: Number(item.monthly) || 0, cleared: false, bank: "", paidDate: null };
+  }
+  return { amountPaid: 0, cleared: false, bank: "", paidDate: null };
+}
+
 export function advanceByFrequency(date, frequency) {
   const d = new Date(date);
   if (frequency === "weekly") d.setDate(d.getDate() + 7);
@@ -260,7 +279,16 @@ export function dueDateInMonth(dueDay, year, monthIndex) {
   return new Date(year, monthIndex, day);
 }
 
-// All upcoming paychecks across every income source, within the horizon.
+// All upcoming paychecks across every income source, within the horizon —
+// plus each source's single most recent past paycheck, even if its date has
+// already passed. A "next pay date" that's slipped a day or two into the
+// past almost always means "I was just paid and haven't updated this yet,"
+// and that money is still real, unspent cash available for this cycle's
+// bills — dropping it entirely just because the date ticked over would
+// throw away the one paycheck the current bills are actually meant to
+// come from. Older past occurrences beyond that single most-recent one are
+// still dropped, so a long-stale date doesn't flood the plan with history.
+//
 // Paychecks landing on the same calendar date are combined into one shared
 // pool so bills are allocated against the household's total for that day,
 // rather than against a single person's check in isolation.
@@ -270,26 +298,35 @@ export function generatePaychecks(incomeSources, horizonDays) {
   const horizonEnd = new Date(today);
   horizonEnd.setDate(horizonEnd.getDate() + horizonDays);
   const byDate = new Map();
+
+  function addCheck(date, amount, sourceName) {
+    const key = isoDate(date);
+    if (!byDate.has(key)) {
+      byDate.set(key, { id: key, date: new Date(date), amount: 0, remaining: 0, items: [], sources: [] });
+    }
+    const check = byDate.get(key);
+    check.amount += amount;
+    check.remaining += amount;
+    check.sources.push({ sourceName, amount });
+  }
+
   for (const src of incomeSources) {
     if (!src.nextPayDate || !src.amount) continue;
     let d = new Date(src.nextPayDate + "T00:00:00");
     let guard = 0;
+    const occurrences = [];
     while (d <= horizonEnd && guard < 80) {
-      if (d >= today) {
-        const key = isoDate(d);
-        const amount = Number(src.amount);
-        if (!byDate.has(key)) {
-          byDate.set(key, { id: key, date: new Date(d), amount: 0, remaining: 0, items: [], sources: [] });
-        }
-        const check = byDate.get(key);
-        check.amount += amount;
-        check.remaining += amount;
-        check.sources.push({ sourceName: src.name, amount });
-      }
+      occurrences.push(new Date(d));
       d = advanceByFrequency(d, src.frequency || "biweekly");
       guard++;
     }
+    const amount = Number(src.amount);
+    const future = occurrences.filter((dt) => dt >= today);
+    const mostRecentPast = occurrences.filter((dt) => dt < today).sort((a, b) => b - a)[0];
+    if (mostRecentPast) addCheck(mostRecentPast, amount, src.name);
+    for (const dt of future) addCheck(dt, amount, src.name);
   }
+
   const checks = Array.from(byDate.values());
   checks.forEach((c) => {
     c.sourceName = c.sources.map((s) => s.sourceName).join(" + ");
@@ -334,15 +371,40 @@ export function generateBillInstances(bills, horizonDays) {
 // across every paycheck in their grace window right away (in half, thirds, however many
 // checks are eligible), since paying them that way has no real downside for the user — this
 // frees up whole-check capacity for bills that genuinely need to land on a single check.
-export function buildPaycheckPlan(incomeSources, bills, horizonDays = 95) {
+export function buildPaycheckPlan(incomeSources, bills, horizonDays = 95, paidByMonth = {}) {
   const paychecks = generatePaychecks(incomeSources, horizonDays);
-  const instances = generateBillInstances(bills, horizonDays);
+  const rawInstances = generateBillInstances(bills, horizonDays);
   const unscheduled = bills.filter((b) => b.isDebt !== false && !b.dueDay && Number(b.monthly) > 0);
   const shortfalls = [];
   const lateButInGrace = [];
 
   if (paychecks.length === 0) {
     return { paychecks, unscheduled, shortfalls, lateButInGrace, noIncome: true };
+  }
+
+  // Bills already recorded as paid on the Monthly Plan don't need to be
+  // planned for again. Pull that amount out of whichever paycheck it
+  // actually came from — the most recent one on or before the date it was
+  // marked paid — instead of leaving that money projected onto a future
+  // check the bill would otherwise have been assigned to.
+  const sortedPaychecksAsc = paychecks.slice().sort((a, b) => a.date - b.date);
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const instances = [];
+  for (const inst of rawInstances) {
+    const monthEntry = paidByMonth[monthKeyOf(inst.dueDate)] || {};
+    const rec = getPaymentRecord(monthEntry, { id: inst.billId, monthly: inst.amount });
+    const paid = Math.min(rec.amountPaid, inst.amount);
+    if (paid > 0.005) {
+      const paidOn = rec.paidDate ? new Date(rec.paidDate + "T00:00:00") : today;
+      const priorChecks = sortedPaychecksAsc.filter((p) => p.date <= paidOn);
+      const sourceCheck = priorChecks.length ? priorChecks[priorChecks.length - 1] : sortedPaychecksAsc[0];
+      sourceCheck.remaining -= paid;
+    }
+    const remainingAmount = inst.amount - paid;
+    if (remainingAmount > 0.005) {
+      instances.push({ ...inst, amount: remainingAmount });
+    }
   }
 
   function flagIfLate(inst, paidDate) {
