@@ -267,6 +267,26 @@ function BillTracker({ saved, userId }) {
     });
   }
 
+  // Shared with the Monthly Plan's own toggle so a bill marked paid from
+  // either page stays in sync everywhere.
+  function togglePaidFromPaycheckItem(item) {
+    const bill = [...debts, ...fixed].find((b) => b.id === item.billId);
+    const monthly = bill ? Number(bill.monthly || 0) : item.amount;
+    const mKey = monthKeyOf(item.dueDate);
+    setPaidByMonth((prev) => {
+      const entry = prev[mKey] || {};
+      const current = getPaymentRecord(entry, { id: item.billId, monthly });
+      const isPaid = monthly > 0 && current.amountPaid >= monthly;
+      const nextAmount = isPaid ? 0 : monthly;
+      const next = {
+        ...current,
+        amountPaid: nextAmount,
+        paidDate: nextAmount > 0 ? (current.paidDate || isoDate(new Date())) : null,
+      };
+      return { ...prev, [mKey]: { ...entry, [item.billId]: next } };
+    });
+  }
+
 
   // chart sampling
   const chartData = useMemo(() => {
@@ -1037,9 +1057,18 @@ function BillTracker({ saved, userId }) {
                       <div className="paycheck-items">
                         {p.items.length === 0 && <div className="ctc-hint">No bills assigned this check.</div>}
                         {p.items.map((it, idx) => (
-                          <div className="paycheck-item" key={`${it.billId}-${idx}`}>
-                            <span>{it.name}{it.split ? <span className="split-badge">{it.splitLabel}</span> : null}</span>
-                            <span className="ctc-mono">{money(it.amount)}</span>
+                          <div
+                            className="paycheck-item"
+                            key={`${it.billId}-${idx}`}
+                            style={{ cursor: "pointer", opacity: it.paid ? 0.6 : 1 }}
+                            title={it.paid ? "Mark unpaid" : "Mark paid"}
+                            onClick={() => togglePaidFromPaycheckItem(it)}
+                          >
+                            <span style={{ textDecoration: it.paid ? "line-through" : "none" }}>
+                              {it.paid && <CheckCircle2 size={12} color="var(--pine-deep)" style={{ marginRight: 4, verticalAlign: -1 }} />}
+                              {it.name}{it.split ? <span className="split-badge">{it.splitLabel}</span> : null}
+                            </span>
+                            <span className="ctc-mono" style={{ textDecoration: it.paid ? "line-through" : "none" }}>{money(it.amount)}</span>
                           </div>
                         ))}
                       </div>

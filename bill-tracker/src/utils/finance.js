@@ -393,28 +393,58 @@ export function buildPaycheckPlan(incomeSources, bills, horizonDays = 95, paidBy
     return { paychecks, unscheduled, shortfalls, lateButInGrace, noIncome: true };
   }
 
-  // Bills already recorded as paid on the Monthly Plan don't need to be
-  // planned for again. Pull that amount out of whichever paycheck it
-  // actually came from — the most recent one on or before the date it was
-  // marked paid — instead of leaving that money projected onto a future
-  // check the bill would otherwise have been assigned to.
+  // Bills already recorded as paid on the Monthly Plan still show up on
+  // whichever paycheck they actually came from — the most recent one on or
+  // before the date they were marked paid — as a struck-through "paid"
+  // item, instead of vanishing from the plan entirely. Only a genuine
+  // leftover balance still needs to go through normal allocation below.
   const sortedPaychecksAsc = paychecks.slice().sort((a, b) => a.date - b.date);
   const today = new Date();
   today.setHours(0, 0, 0, 0);
+
+  function sourceCheckFor(paidDateStr) {
+    const paidOn = paidDateStr ? new Date(paidDateStr + "T00:00:00") : today;
+    const priorChecks = sortedPaychecksAsc.filter((p) => p.date <= paidOn);
+    return priorChecks.length ? priorChecks[priorChecks.length - 1] : sortedPaychecksAsc[0];
+  }
+
+  function recordPaidItem(check, billId, name, amount, dueDate, deadline) {
+    check.remaining -= amount;
+    check.items.push({ billId, name, amount: Math.round(amount * 100) / 100, dueDate, deadline, split: false, paid: true });
+  }
+
+  const handledBillMonths = new Set();
   const instances = [];
   for (const inst of rawInstances) {
-    const monthEntry = paidByMonth[monthKeyOf(inst.dueDate)] || {};
+    const mKey = monthKeyOf(inst.dueDate);
+    handledBillMonths.add(`${inst.billId}|${mKey}`);
+    const monthEntry = paidByMonth[mKey] || {};
     const rec = getPaymentRecord(monthEntry, { id: inst.billId, monthly: inst.amount });
     const paid = Math.min(rec.amountPaid, inst.amount);
     if (paid > 0.005) {
-      const paidOn = rec.paidDate ? new Date(rec.paidDate + "T00:00:00") : today;
-      const priorChecks = sortedPaychecksAsc.filter((p) => p.date <= paidOn);
-      const sourceCheck = priorChecks.length ? priorChecks[priorChecks.length - 1] : sortedPaychecksAsc[0];
-      sourceCheck.remaining -= paid;
+      recordPaidItem(sourceCheckFor(rec.paidDate), inst.billId, inst.name, paid, inst.dueDate, inst.deadline);
     }
     const remainingAmount = inst.amount - paid;
     if (remainingAmount > 0.005) {
       instances.push({ ...inst, amount: remainingAmount });
+    }
+  }
+
+  // Payments recorded on the Monthly Plan for a bill that has no scheduled
+  // due-date instance this month — an unscheduled bill, or an extra payment
+  // beyond what was already planned — still represent real money leaving an
+  // account. Surface them on the current paycheck too, so nothing paid for
+  // is invisible here. Bounded to the current month only, so an old extra
+  // payment from a past month doesn't keep re-attaching itself to whatever
+  // paycheck happens to be earliest in the current view.
+  const currentMonthKey = monthKeyOf(today);
+  const currentMonthEntry = paidByMonth[currentMonthKey] || {};
+  for (const bill of bills) {
+    if (handledBillMonths.has(`${bill.id}|${currentMonthKey}`)) continue;
+    const rec = getPaymentRecord(currentMonthEntry, { id: bill.id, monthly: bill.monthly });
+    if (rec.amountPaid > 0.005) {
+      const paidOn = rec.paidDate ? new Date(rec.paidDate + "T00:00:00") : today;
+      recordPaidItem(sourceCheckFor(rec.paidDate), bill.id, bill.name, rec.amountPaid, paidOn, paidOn);
     }
   }
 
