@@ -9,7 +9,7 @@ import {
 
 // Import your extracted logic and components
 import { CATEGORY_OPTIONS, FIXED_CATEGORY_OPTIONS, TIERS, initialDebts, initialFixed, nextId } from "./data/constants";
-import { allocateExtra, allocateMaxCashFlow, buildPaycheckPlan, fastestStrategyForBoost, minimumAdjustedDebts, money, monthLabel, monthLabelFull, pct, simulatePayoff, fmtDate, monthKeyOf, getPaymentRecord, isoDate } from "./utils/finance";
+import { allocateExtra, allocateMaxCashFlow, buildPaycheckPlan, fastestStrategyForBoost, minimumAdjustedDebts, money, monthLabel, monthLabelFull, pct, simulatePayoff, fmtDate, monthKeyOf, getPaymentRecord, addPaymentRecord, removePaymentRecord, updatePaymentRecord, clearPaymentRecord, isoDate } from "./utils/finance";
 import AddDebtModal from "./components/AddDebtModal";
 import AddFixedModal from "./components/AddFixedModal";
 import { supabase } from "./lib/supabaseClient";
@@ -269,22 +269,18 @@ function BillTracker({ saved, userId }) {
 
   // Shared with the Monthly Plan's own toggle so a bill marked paid from
   // either page stays in sync everywhere.
+  // A paycheck card can show one bill as two separate split items (part 1,
+  // part 2) on two different checks — clicking one must only mark that
+  // specific portion paid, not the whole bill, so the other split part
+  // isn't wrongly crossed off too. Each paid item carries the exact
+  // payment it came from, so toggling it off removes only that payment.
   function togglePaidFromPaycheckItem(item) {
-    const bill = [...debts, ...fixed].find((b) => b.id === item.billId);
-    const monthly = bill ? Number(bill.monthly || 0) : item.amount;
     const mKey = monthKeyOf(item.dueDate);
-    setPaidByMonth((prev) => {
-      const entry = prev[mKey] || {};
-      const current = getPaymentRecord(entry, { id: item.billId, monthly });
-      const isPaid = monthly > 0 && current.amountPaid >= monthly;
-      const nextAmount = isPaid ? 0 : monthly;
-      const next = {
-        ...current,
-        amountPaid: nextAmount,
-        paidDate: nextAmount > 0 ? (current.paidDate || isoDate(new Date())) : null,
-      };
-      return { ...prev, [mKey]: { ...entry, [item.billId]: next } };
-    });
+    if (item.paid && item.paymentId) {
+      setPaidByMonth((prev) => removePaymentRecord(prev, mKey, item.billId, item.paymentId));
+    } else if (!item.paid) {
+      setPaidByMonth((prev) => addPaymentRecord(prev, mKey, item.billId, { amount: item.amount, date: isoDate(new Date()) }));
+    }
   }
 
 
@@ -1321,25 +1317,27 @@ function MonthlyPlan({ debtBills, fixed, paidByMonth, setPaidByMonth }) {
     return Number(it.monthly || 0) > 0 && rec.amountPaid >= Number(it.monthly || 0);
   }).length;
 
-  function updateRecord(item, patch) {
-    setPaidByMonth((prev) => {
-      const entry = prev[monthKey] || {};
-      const current = getPaymentRecord(entry, item);
-      const next = { ...current, ...patch };
-      // Auto-stamp today's date the moment a payment first shows up, so the
-      // paycheck plan knows which check it actually came from without extra
-      // clicks — still editable afterward for backdating.
-      if (patch.amountPaid !== undefined && patch.paidDate === undefined) {
-        next.paidDate = patch.amountPaid > 0 ? (current.paidDate || isoDate(new Date())) : null;
-      }
-      return { ...prev, [monthKey]: { ...entry, [item.id]: next } };
-    });
+  function addPayment(item, amount, date) {
+    if (!(amount > 0)) return;
+    setPaidByMonth((prev) => addPaymentRecord(prev, monthKey, item.id, { amount, date: date || isoDate(new Date()) }));
+  }
+
+  function removePayment(item, paymentId) {
+    setPaidByMonth((prev) => removePaymentRecord(prev, monthKey, item.id, paymentId));
+  }
+
+  function updatePayment(item, paymentId, patch) {
+    setPaidByMonth((prev) => updatePaymentRecord(prev, monthKey, item.id, paymentId, patch));
   }
 
   function toggleFullyPaid(item) {
     const rec = getPaymentRecord(monthEntry, item);
     const monthly = Number(item.monthly || 0);
-    updateRecord(item, { amountPaid: rec.amountPaid >= monthly ? 0 : monthly });
+    if (rec.amountPaid >= monthly && monthly > 0) {
+      setPaidByMonth((prev) => clearPaymentRecord(prev, monthKey, item.id));
+    } else {
+      addPayment(item, monthly - rec.amountPaid);
+    }
   }
 
   function shiftMonth(delta) {
@@ -1377,72 +1375,105 @@ function MonthlyPlan({ debtBills, fixed, paidByMonth, setPaidByMonth }) {
         <div className="card"><div className="ctc-hint">No debts or fixed expenses yet — add some from the Debts or Fixed Expenses tabs.</div></div>
       )}
 
-      {items.map((it) => {
-        const monthly = Number(it.monthly || 0);
-        const rec = getPaymentRecord(monthEntry, it);
-        const fullyPaid = monthly > 0 && rec.amountPaid >= monthly;
-        const partial = rec.amountPaid > 0 && !fullyPaid;
-        const billRemaining = Math.max(0, monthly - rec.amountPaid);
+      {items.map((it) => (
+        <BillPaymentCard
+          key={it.id}
+          item={it}
+          rec={getPaymentRecord(monthEntry, it)}
+          onToggleFull={() => toggleFullyPaid(it)}
+          onAddPayment={(amount, date) => addPayment(it, amount, date)}
+          onRemovePayment={(paymentId) => removePayment(it, paymentId)}
+          onUpdatePayment={(paymentId, patch) => updatePayment(it, paymentId, patch)}
+        />
+      ))}
+    </div>
+  );
+}
 
-        let icon;
-        if (fullyPaid) icon = <CheckCircle2 size={20} color="var(--pine-deep)" />;
-        else if (partial) icon = <Circle size={20} color="var(--brass-deep)" fill="var(--brass-deep)" fillOpacity={0.25} />;
-        else icon = <Circle size={20} color="var(--line)" />;
+function BillPaymentCard({ item, rec, onToggleFull, onAddPayment, onRemovePayment, onUpdatePayment }) {
+  const [draftAmount, setDraftAmount] = useState("");
+  const [draftDate, setDraftDate] = useState(() => isoDate(new Date()));
 
-        return (
-          <div key={it.id} className="card" style={{ marginBottom: 8, opacity: fullyPaid ? 0.7 : 1 }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-              <button
-                className="btn-ghost btn-sm"
-                style={{ border: "none", padding: 0 }}
-                onClick={() => toggleFullyPaid(it)}
-                title={fullyPaid ? "Mark unpaid" : "Mark fully paid"}
-              >
-                {icon}
-              </button>
-              <div style={{ flex: 1 }}>
-                <div style={{ fontWeight: 600, fontSize: 14, textDecoration: fullyPaid ? "line-through" : "none" }}>{it.name}</div>
-                {it.dueDay != null && <div className="ctc-hint">Due the {ordinal(it.dueDay)}</div>}
-                {partial && <div className="ctc-hint" style={{ color: "var(--brass-deep)", fontWeight: 600 }}>Partial — {money(billRemaining)} remaining</div>}
-              </div>
-              <div style={{ textAlign: "right" }}>
-                <input
-                  type="number"
-                  className="ctc-mono"
-                  value={rec.amountPaid || ""}
-                  placeholder="0"
-                  onChange={(e) => updateRecord(it, { amountPaid: e.target.value === "" ? 0 : Number(e.target.value) })}
-                  style={{ width: 90, textAlign: "right", border: "1px solid var(--line)", borderRadius: 3, padding: "4px 6px", fontSize: 13 }}
-                />
-                <div className="ctc-hint" style={{ marginTop: 2 }}>of {money(monthly)}</div>
-              </div>
-            </div>
-            <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 10, paddingTop: 10, borderTop: "1px dashed var(--line)", flexWrap: "wrap" }}>
-              <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12.5, color: "var(--ink-soft)" }}>
-                <input type="checkbox" checked={rec.cleared} onChange={(e) => updateRecord(it, { cleared: e.target.checked })} />
-                Cleared the bank
+  const monthly = Number(item.monthly || 0);
+  const fullyPaid = monthly > 0 && rec.amountPaid >= monthly;
+  const partial = rec.amountPaid > 0 && !fullyPaid;
+  const billRemaining = Math.max(0, monthly - rec.amountPaid);
+
+  let icon;
+  if (fullyPaid) icon = <CheckCircle2 size={20} color="var(--pine-deep)" />;
+  else if (partial) icon = <Circle size={20} color="var(--brass-deep)" fill="var(--brass-deep)" fillOpacity={0.25} />;
+  else icon = <Circle size={20} color="var(--line)" />;
+
+  function submitDraft() {
+    const amt = Number(draftAmount);
+    if (amt > 0) {
+      onAddPayment(amt, draftDate);
+      setDraftAmount("");
+    }
+  }
+
+  return (
+    <div className="card" style={{ marginBottom: 8, opacity: fullyPaid ? 0.7 : 1 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+        <button className="btn-ghost btn-sm" style={{ border: "none", padding: 0 }} onClick={onToggleFull} title={fullyPaid ? "Mark unpaid" : "Mark fully paid"}>
+          {icon}
+        </button>
+        <div style={{ flex: 1 }}>
+          <div style={{ fontWeight: 600, fontSize: 14, textDecoration: fullyPaid ? "line-through" : "none" }}>{item.name}</div>
+          {item.dueDay != null && <div className="ctc-hint">Due the {ordinal(item.dueDay)}</div>}
+          {partial && <div className="ctc-hint" style={{ color: "var(--brass-deep)", fontWeight: 600 }}>Partial — {money(billRemaining)} remaining</div>}
+        </div>
+        <div style={{ textAlign: "right" }}>
+          <div className="ctc-mono" style={{ fontWeight: 600 }}>{money(rec.amountPaid)}</div>
+          <div className="ctc-hint" style={{ marginTop: 2 }}>of {money(monthly)}</div>
+        </div>
+      </div>
+
+      {rec.payments.length > 0 && (
+        <div style={{ marginTop: 10, paddingTop: 10, borderTop: "1px dashed var(--line)", display: "flex", flexDirection: "column", gap: 6 }}>
+          {rec.payments.map((p) => (
+            <div key={p.id} style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+              <span className="ctc-mono" style={{ fontWeight: 600, minWidth: 55 }}>{money(p.amount)}</span>
+              <input
+                type="date"
+                value={p.date || ""}
+                onChange={(e) => onUpdatePayment(p.id, { date: e.target.value || null })}
+                style={{ border: "1px solid var(--line)", borderRadius: 3, padding: "3px 5px", fontSize: 11.5, fontFamily: "Inter, sans-serif" }}
+              />
+              <label style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 11.5, color: "var(--ink-soft)" }}>
+                <input type="checkbox" checked={!!p.cleared} onChange={(e) => onUpdatePayment(p.id, { cleared: e.target.checked })} />
+                Cleared
               </label>
               <input
-                value={rec.bank}
-                onChange={(e) => updateRecord(it, { bank: e.target.value })}
-                placeholder="Which bank/account"
-                style={{ flex: 1, minWidth: 120, border: "1px solid var(--line)", borderRadius: 3, padding: "5px 8px", fontSize: 12.5, fontFamily: "Inter, sans-serif" }}
+                value={p.bank || ""}
+                onChange={(e) => onUpdatePayment(p.id, { bank: e.target.value })}
+                placeholder="Bank/account"
+                style={{ flex: 1, minWidth: 90, border: "1px solid var(--line)", borderRadius: 3, padding: "4px 6px", fontSize: 11.5, fontFamily: "Inter, sans-serif" }}
               />
-              {rec.amountPaid > 0 && (
-                <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12.5, color: "var(--ink-soft)" }}>
-                  Paid on
-                  <input
-                    type="date"
-                    value={rec.paidDate || ""}
-                    onChange={(e) => updateRecord(it, { paidDate: e.target.value || null })}
-                    style={{ border: "1px solid var(--line)", borderRadius: 3, padding: "4px 6px", fontSize: 12.5, fontFamily: "Inter, sans-serif" }}
-                  />
-                </label>
-              )}
+              <button className="btn-ghost btn-sm" style={{ border: "none", padding: 2 }} title="Remove this payment" onClick={() => onRemovePayment(p.id)}>
+                <Trash2 size={12} color="#A5473A" />
+              </button>
             </div>
-          </div>
-        );
-      })}
+          ))}
+        </div>
+      )}
+
+      <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 10, paddingTop: 10, borderTop: "1px dashed var(--line)" }}>
+        <input
+          type="number"
+          placeholder="Amount"
+          value={draftAmount}
+          onChange={(e) => setDraftAmount(e.target.value)}
+          style={{ width: 80, border: "1px solid var(--line)", borderRadius: 3, padding: "4px 6px", fontSize: 12.5 }}
+        />
+        <input
+          type="date"
+          value={draftDate}
+          onChange={(e) => setDraftDate(e.target.value)}
+          style={{ border: "1px solid var(--line)", borderRadius: 3, padding: "4px 6px", fontSize: 12.5, fontFamily: "Inter, sans-serif" }}
+        />
+        <button className="btn btn-ghost btn-sm" onClick={submitDraft}><Plus size={13} /> Add payment</button>
+      </div>
     </div>
   );
 }

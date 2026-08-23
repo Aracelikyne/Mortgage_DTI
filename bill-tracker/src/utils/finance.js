@@ -250,15 +250,58 @@ export function monthKeyOf(date) {
 // month. Older saved data stored a plain `true`/`false` here (from before
 // partial payments existed) — read as fully paid / not paid so nothing
 // breaks.
+// A bill/month's payment record is a list of individual payments — each
+// with its own amount, date, cleared status, and bank — so a bill split
+// across several partial payments (or several paychecks) can be tracked
+// piece by piece instead of one all-or-nothing total. `amountPaid` is
+// derived as the sum, kept for callers that just need the running total.
 export function getPaymentRecord(monthEntry, item) {
   const raw = (monthEntry || {})[item.id];
+  if (raw && typeof raw === "object" && Array.isArray(raw.payments)) {
+    const amountPaid = raw.payments.reduce((s, p) => s + (Number(p.amount) || 0), 0);
+    return { payments: raw.payments, amountPaid };
+  }
+  // Older saved shapes, from before multiple partial payments existed.
   if (raw && typeof raw === "object") {
-    return { amountPaid: Number(raw.amountPaid) || 0, cleared: !!raw.cleared, bank: raw.bank || "", paidDate: raw.paidDate || null };
+    const amt = Number(raw.amountPaid) || 0;
+    const payments = amt > 0.005 ? [{ id: "legacy", amount: amt, date: raw.paidDate || null, cleared: !!raw.cleared, bank: raw.bank || "" }] : [];
+    return { payments, amountPaid: amt };
   }
   if (raw === true) {
-    return { amountPaid: Number(item.monthly) || 0, cleared: false, bank: "", paidDate: null };
+    const amt = Number(item.monthly) || 0;
+    return { payments: amt > 0.005 ? [{ id: "legacy", amount: amt, date: null, cleared: false, bank: "" }] : [], amountPaid: amt };
   }
-  return { amountPaid: 0, cleared: false, bank: "", paidDate: null };
+  return { payments: [], amountPaid: 0 };
+}
+
+function newPaymentId() {
+  return `p${Date.now()}${Math.random().toString(36).slice(2, 8)}`;
+}
+
+export function addPaymentRecord(paidByMonth, monthKey, billId, payment) {
+  const entry = paidByMonth[monthKey] || {};
+  const rec = getPaymentRecord(entry, { id: billId, monthly: 0 });
+  const payments = [...rec.payments, { id: newPaymentId(), cleared: false, bank: "", ...payment }];
+  return { ...paidByMonth, [monthKey]: { ...entry, [billId]: { payments } } };
+}
+
+export function removePaymentRecord(paidByMonth, monthKey, billId, paymentId) {
+  const entry = paidByMonth[monthKey] || {};
+  const rec = getPaymentRecord(entry, { id: billId, monthly: 0 });
+  const payments = rec.payments.filter((p) => p.id !== paymentId);
+  return { ...paidByMonth, [monthKey]: { ...entry, [billId]: { payments } } };
+}
+
+export function updatePaymentRecord(paidByMonth, monthKey, billId, paymentId, patch) {
+  const entry = paidByMonth[monthKey] || {};
+  const rec = getPaymentRecord(entry, { id: billId, monthly: 0 });
+  const payments = rec.payments.map((p) => (p.id === paymentId ? { ...p, ...patch } : p));
+  return { ...paidByMonth, [monthKey]: { ...entry, [billId]: { payments } } };
+}
+
+export function clearPaymentRecord(paidByMonth, monthKey, billId) {
+  const entry = paidByMonth[monthKey] || {};
+  return { ...paidByMonth, [monthKey]: { ...entry, [billId]: { payments: [] } } };
 }
 
 export function advanceByFrequency(date, frequency) {
@@ -414,10 +457,10 @@ export function buildPaycheckPlan(incomeSources, bills, horizonDays = 95, paidBy
     return priorChecks.length ? priorChecks[priorChecks.length - 1] : null;
   }
 
-  function recordPaidItem(check, billId, name, amount, dueDate, deadline) {
+  function recordPaidItem(check, billId, name, amount, dueDate, deadline, paymentId) {
     if (!check) return; // paid before any known paycheck — not this plan's to show
     check.remaining -= amount;
-    check.items.push({ billId, name, amount: Math.round(amount * 100) / 100, dueDate, deadline, split: false, paid: true });
+    check.items.push({ billId, name, amount: Math.round(amount * 100) / 100, dueDate, deadline, split: false, paid: true, paymentId });
   }
 
   const handledBillMonths = new Set();
@@ -427,11 +470,20 @@ export function buildPaycheckPlan(incomeSources, bills, horizonDays = 95, paidBy
     handledBillMonths.add(`${inst.billId}|${mKey}`);
     const monthEntry = paidByMonth[mKey] || {};
     const rec = getPaymentRecord(monthEntry, { id: inst.billId, monthly: inst.amount });
-    const paid = Math.min(rec.amountPaid, inst.amount);
-    if (paid > 0.005) {
-      recordPaidItem(sourceCheckFor(rec.paidDate), inst.billId, inst.name, paid, inst.dueDate, inst.deadline);
+    // Each individual payment is attributed to whichever paycheck it
+    // actually came from by its own date, capped so payments beyond the
+    // bill's total (an accidental overpay) don't reduce more than one
+    // check's worth of "remaining".
+    let allocated = 0;
+    for (const pmt of rec.payments) {
+      if (allocated >= inst.amount - 0.005) break;
+      const amt = Math.min(Number(pmt.amount) || 0, inst.amount - allocated);
+      if (amt > 0.005) {
+        recordPaidItem(sourceCheckFor(pmt.date), inst.billId, inst.name, amt, inst.dueDate, inst.deadline, pmt.id);
+        allocated += amt;
+      }
     }
-    const remainingAmount = inst.amount - paid;
+    const remainingAmount = inst.amount - Math.min(rec.amountPaid, inst.amount);
     if (remainingAmount > 0.005) {
       instances.push({ ...inst, amount: remainingAmount });
     }
@@ -449,9 +501,12 @@ export function buildPaycheckPlan(incomeSources, bills, horizonDays = 95, paidBy
   for (const bill of bills) {
     if (handledBillMonths.has(`${bill.id}|${currentMonthKey}`)) continue;
     const rec = getPaymentRecord(currentMonthEntry, { id: bill.id, monthly: bill.monthly });
-    if (rec.amountPaid > 0.005) {
-      const paidOn = rec.paidDate ? new Date(rec.paidDate + "T00:00:00") : today;
-      recordPaidItem(sourceCheckFor(rec.paidDate), bill.id, bill.name, rec.amountPaid, paidOn, paidOn);
+    for (const pmt of rec.payments) {
+      const amt = Number(pmt.amount) || 0;
+      if (amt > 0.005) {
+        const paidOn = pmt.date ? new Date(pmt.date + "T00:00:00") : today;
+        recordPaidItem(sourceCheckFor(pmt.date), bill.id, bill.name, amt, paidOn, paidOn, pmt.id);
+      }
     }
   }
 
