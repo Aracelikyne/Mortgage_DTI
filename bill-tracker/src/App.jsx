@@ -316,6 +316,7 @@ function BillTracker({ saved, userId }) {
     items: debts.filter((d) => d.priority === t),
   }));
   const protectedGroup = debts.filter((d) => d.protected);
+  const protectedBalance = protectedGroup.reduce((s, d) => s + Number(d.balance || 0), 0);
 
   function updateDebt(id, patch) {
     setDebts((prev) => prev.map((d) => (d.id === id ? { ...d, ...patch } : d)));
@@ -649,12 +650,22 @@ function BillTracker({ saved, userId }) {
               const w = baseline > 0 ? (balance / baseline) * 100 : 0;
               return <div key={tier} className="wall-seg" style={{ width: `${w}%`, background: TIERS[tier].color }} title={`${TIERS[tier].label}: ${money(balance)}`} />;
             })}
+            {protectedBalance > 0 && (
+              <div
+                className="wall-seg"
+                style={{ width: `${wallBaseline > 0 ? (protectedBalance / wallBaseline) * 100 : 0}%`, background: "#6B7A8F" }}
+                title={`Protected (minimum-only): ${money(protectedBalance)}`}
+              />
+            )}
           </div>
           <div className="wall-foot">
             <div className="wall-legend">
               {Object.entries(TIERS).map(([t, v]) => (
                 <span key={t}><span className="swatch" style={{ background: v.color }} />{v.label}</span>
               ))}
+              {protectedBalance > 0 && (
+                <span><span className="swatch" style={{ background: "#6B7A8F" }} />Protected ({money(protectedBalance)})</span>
+              )}
               {paidDownSoFar > 0 && (
                 <span><span className="swatch" style={{ background: "#E4DCC5", border: "1px solid var(--line)" }} />Paid off already ({money(paidDownSoFar)})</span>
               )}
