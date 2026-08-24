@@ -4,14 +4,20 @@ import {
 } from "recharts";
 import {
   Home, KeyRound, Lock, Plus, Trash2, ChevronDown, ChevronUp, ChevronLeft, ChevronRight,
-  Wallet, TrendingDown, Sparkles, PiggyBank, Calendar, LogOut, CheckCircle2, Circle, Pencil
+  Wallet, TrendingDown, Sparkles, PiggyBank, Calendar, LogOut, CheckCircle2, Circle, Pencil, Clock, Zap, FlaskConical
 } from "lucide-react";
 
 // Import your extracted logic and components
 import { CATEGORY_OPTIONS, FIXED_CATEGORY_OPTIONS, TIERS, initialDebts, initialFixed, nextId } from "./data/constants";
-import { allocateExtra, allocateMaxCashFlow, buildPaycheckPlan, fastestStrategyForBoost, minimumAdjustedDebts, money, monthLabel, monthLabelFull, pct, simulatePayoff, fmtDate, monthKeyOf, getPaymentRecord, addPaymentRecord, removePaymentRecord, updatePaymentRecord, clearPaymentRecord, isoDate } from "./utils/finance";
+import { allocateExtra, allocateMaxCashFlow, buildPaycheckPlan, fastestStrategyForBoost, minimumAdjustedDebts, money, monthLabel, monthLabelFull, pct, simulatePayoff, fmtDate, monthKeyOf, getPaymentRecord, addPaymentRecord, removePaymentRecord, updatePaymentRecord, clearPaymentRecord, isoDate, isPaymentSettled } from "./utils/finance";
 import AddDebtModal from "./components/AddDebtModal";
 import AddFixedModal from "./components/AddFixedModal";
+import AutopaySettingsModal from "./components/AutopaySettingsModal";
+import PresenceBar from "./components/PresenceBar";
+import CursorOverlay from "./components/CursorOverlay";
+import NotesPanel from "./components/NotesPanel";
+import { describeChanges } from "./utils/activity";
+import { useLiveFollow } from "./hooks/useLiveFollow";
 import { supabase } from "./lib/supabaseClient";
 
 // One-time migration from the old localStorage-only version of the app.
@@ -24,9 +30,30 @@ function readLegacyLocalState() {
   }
 }
 
+// GitHub OAuth via Supabase populates user_metadata with whatever GitHub
+// exposes — prefer their display name, fall back to their GitHub handle,
+// then email, so there's always something to attribute an edit to.
+function displayNameFor(user) {
+  const meta = user?.user_metadata || {};
+  return meta.full_name || meta.name || meta.user_name || user?.email || "Someone";
+}
+
+function relativeTime(iso) {
+  if (!iso) return null;
+  const diffMs = Date.now() - new Date(iso).getTime();
+  const mins = Math.round(diffMs / 60000);
+  if (mins < 1) return "just now";
+  if (mins < 60) return `${mins}m ago`;
+  const hours = Math.round(mins / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.round(hours / 24);
+  return `${days}d ago`;
+}
+
 export default function App() {
   const [session, setSession] = useState(undefined); // undefined = still checking, null = signed out
   const [saved, setSaved] = useState(null); // null until the row has been fetched
+  const [initialLastEditedBy, setInitialLastEditedBy] = useState({ name: null, at: null });
   const [loadError, setLoadError] = useState(null);
 
   useEffect(() => {
@@ -42,40 +69,49 @@ export default function App() {
     if (!session) return;
     let cancelled = false;
     supabase
-      .from("app_state")
-      .select("data")
-      .eq("user_id", session.user.id)
+      .from("household_state")
+      .select("data, updated_at, updated_by_name")
+      .eq("id", "household")
       .maybeSingle()
       .then(async ({ data, error }) => {
         if (cancelled) return;
         if (error) {
           console.error(error);
-          setLoadError("Couldn't reach your saved data in Supabase — starting blank, and edits may not save until this is fixed. Check the browser console for details.");
+          setLoadError("Couldn't reach the shared data in Supabase — starting blank, and edits may not save until this is fixed. Check the browser console for details (the household_state table may be missing — see supabase/shared_data_migration.sql).");
           setSaved({});
           return;
         }
 
         if (data?.data) {
           setSaved(data.data);
+          setInitialLastEditedBy({ name: data.updated_by_name, at: data.updated_at });
           return;
         }
 
-        // No row in Supabase yet — check for data from the old localStorage-only
-        // version of this app, on this browser, and import it once so nothing
-        // has to be re-entered.
-        const legacy = readLegacyLocalState();
+        // No shared row yet — seed it once from whichever legacy source has
+        // data: this user's old private per-user row, or (older still) this
+        // browser's localStorage — so nothing has to be re-entered.
+        const { data: legacyRow } = await supabase
+          .from("app_state")
+          .select("data")
+          .eq("user_id", session.user.id)
+          .maybeSingle();
+        const legacy = legacyRow?.data || readLegacyLocalState();
         if (legacy && Object.keys(legacy).length > 0) {
-          const { error: upsertError } = await supabase.from("app_state").upsert({
-            user_id: session.user.id,
+          const { error: upsertError } = await supabase.from("household_state").upsert({
+            id: "household",
             data: legacy,
             updated_at: new Date().toISOString(),
+            updated_by_id: session.user.id,
+            updated_by_name: displayNameFor(session.user),
           });
           if (cancelled) return;
           if (upsertError) {
             console.error(upsertError);
-            setLoadError("Couldn't save your imported data to Supabase — the app_state table may be missing (see supabase/schema.sql). Your edits from here may not save either.");
+            setLoadError("Couldn't save the imported data to Supabase — the household_state table may be missing (see supabase/shared_data_migration.sql). Your edits from here may not save either.");
           }
           setSaved(legacy);
+          setInitialLastEditedBy({ name: displayNameFor(session.user), at: new Date().toISOString() });
           return;
         }
 
@@ -103,7 +139,13 @@ export default function App() {
           {loadError}
         </div>
       )}
-      <BillTracker key={session.user.id} saved={saved} userId={session.user.id} />
+      <BillTracker
+        key={session.user.id}
+        saved={saved}
+        userId={session.user.id}
+        userName={displayNameFor(session.user)}
+        initialLastEditedBy={initialLastEditedBy}
+      />
     </>
   );
 }
@@ -139,7 +181,7 @@ function AuthScreen({ loading }) {
   );
 }
 
-function BillTracker({ saved, userId }) {
+function BillTracker({ saved, userId, userName, initialLastEditedBy }) {
   const [debts, setDebts] = useState(saved.debts || initialDebts);
   const [fixed, setFixed] = useState(saved.fixed || initialFixed);
   const [income, setIncome] = useState(saved.income ?? 15000);
@@ -154,6 +196,7 @@ function BillTracker({ saved, userId }) {
     { id: nextId(), name: "Partner's paycheck", amount: "", nextPayDate: "", frequency: "biweekly" },
   ]);
   const [boosts, setBoosts] = useState(saved.boosts || []);
+  const [paycheckReserve, setPaycheckReserve] = useState(saved.paycheckReserve ?? 500);
   const [paidByMonth, setPaidByMonth] = useState(saved.paidByMonth || {});
   const [debtBaseline, setDebtBaseline] = useState(saved.debtBaseline ?? null);
   const [paycheckOverrides, setPaycheckOverrides] = useState(saved.paycheckOverrides || {});
@@ -163,16 +206,105 @@ function BillTracker({ saved, userId }) {
   const [suggestion, setSuggestion] = useState(null);
   const [showAddDebt, setShowAddDebt] = useState(false);
   const [showAddFixed, setShowAddFixed] = useState(false);
+  const [editingAutopay, setEditingAutopay] = useState(null); // { kind: "debt" | "fixed", item }
   const [collapsedTiers, setCollapsedTiers] = useState({});
   const [editingPaycheckId, setEditingPaycheckId] = useState(null);
   const [saveStatus, setSaveStatus] = useState("idle"); // idle | saving | saved | error
   const saveTimer = useRef(null);
+  const [lastEditedBy, setLastEditedBy] = useState(initialLastEditedBy || { name: null, at: null });
+  const [remoteChangePending, setRemoteChangePending] = useState(false);
+
+  // Fires directly from the incoming broadcast (inside useLiveFollow), not
+  // from a effect reacting to state afterward — mirrors whoever we're
+  // following: their page switch, and their scroll position within it.
+  // This is what turns "see a cursor" into "watch what they're doing."
+  function handleLeaderUpdate(payload) {
+    setPage(payload.page);
+    const doc = document.documentElement;
+    const maxScroll = Math.max(1, doc.scrollHeight - doc.clientHeight);
+    window.scrollTo(0, payload.scrollFrac * maxScroll);
+  }
+
+  const { onlineUsers, followingId, followingName, leaderState, followedByNames, follow, unfollow } = useLiveFollow({ userId, userName, page, onLeaderUpdate: handleLeaderUpdate });
+  const spectating = !!followingId;
+  const spectatingRef = useRef(false);
+  useEffect(() => { spectatingRef.current = spectating; }, [spectating]);
+
+  // Sandbox mode: a play-with-the-numbers detour that never touches the
+  // shared row. Entering it doesn't need to snapshot anything locally —
+  // Supabase already holds the last real, saved state the whole time
+  // sandboxing is on (since saving is suppressed below), so exiting just
+  // re-syncs from there, cleanly discarding whatever was tried.
+  const [sandboxActive, setSandboxActive] = useState(false);
+  const sandboxActiveRef = useRef(false);
+  useEffect(() => { sandboxActiveRef.current = sandboxActive; }, [sandboxActive]);
+
+  // What's actually been saved to the shared row so far — the diff base for
+  // describing what a save changed, and the target applyLoadedState below
+  // keeps in sync whenever a remote update is absorbed without a save.
+  // Starts at the data this session loaded with, not an empty object, so
+  // the very first save (if anything changed before this component even
+  // mounted, e.g. an autopay auto-settling on load) doesn't get misread as
+  // "everything was just added."
+  const lastSavedState = useRef(saved);
+
+  // Replaces every piece of local state with a freshly loaded shared row —
+  // used both to seed a follow session with the leader's current data, and
+  // to silently absorb the other person's saves while nothing here is
+  // pending, instead of making every load go through a full page refresh.
+  const applyLoadedState = useCallback((data) => {
+    setDebts(data.debts || initialDebts);
+    setFixed(data.fixed || initialFixed);
+    setIncome(data.income ?? 15000);
+    setNetIncome(data.netIncome ?? "");
+    setIncludeRent(data.includeRent ?? false);
+    setRecurringExtra(data.recurringExtra ?? 0);
+    setStrategy(data.strategy || "tiered");
+    setTargetDTI(data.targetDTI ?? 43);
+    setMortgageEstimate(data.mortgageEstimate ?? 3000);
+    setIncomeSources(data.incomeSources || []);
+    setBoosts(data.boosts || []);
+    setPaycheckReserve(data.paycheckReserve ?? 500);
+    setPaidByMonth(data.paidByMonth || {});
+    setDebtBaseline(data.debtBaseline ?? null);
+    setPaycheckOverrides(data.paycheckOverrides || {});
+    lastSavedState.current = data;
+  }, []);
+
+  const refetchHousehold = useCallback(async () => {
+    const { data, error } = await supabase
+      .from("household_state")
+      .select("data, updated_at, updated_by_name")
+      .eq("id", "household")
+      .maybeSingle();
+    if (!error && data?.data) {
+      applyLoadedState(data.data);
+      setLastEditedBy({ name: data.updated_by_name, at: data.updated_at });
+    }
+  }, [applyLoadedState]);
+
+  const handleFollow = useCallback((targetId, targetName) => {
+    follow(targetId, targetName);
+    refetchHousehold();
+    setRemoteChangePending(false); // the refetch above already catches up
+  }, [follow, refetchHousehold]);
+
+  const enterSandbox = useCallback(() => setSandboxActive(true), []);
+  // Re-sync from the shared row before dropping the sandbox flag, so the
+  // debounced save effect below still sees sandboxing as active for the
+  // state changes this restore itself triggers — otherwise the discarded
+  // sandbox numbers could get saved right back over real data.
+  const exitSandbox = useCallback(async () => {
+    await refetchHousehold();
+    setRemoteChangePending(false); // the refetch above already caught up
+    setSandboxActive(false);
+  }, [refetchHousehold]);
 
   // ---- persistence ----
   const isFirstRender = useRef(true);
   const latestState = useRef(null);
   useEffect(() => {
-    latestState.current = { debts, fixed, income, netIncome, includeRent, recurringExtra, strategy, targetDTI, mortgageEstimate, incomeSources, boosts, paidByMonth, debtBaseline, paycheckOverrides };
+    latestState.current = { debts, fixed, income, netIncome, includeRent, recurringExtra, strategy, targetDTI, mortgageEstimate, incomeSources, boosts, paycheckReserve, paidByMonth, debtBaseline, paycheckOverrides };
   });
 
   const flushSave = useCallback(() => {
@@ -181,29 +313,83 @@ function BillTracker({ saved, userId }) {
       saveTimer.current = null;
     }
     setSaveStatus("saving");
+    const nextState = latestState.current;
+    const changes = describeChanges(lastSavedState.current, nextState);
+    const now = new Date().toISOString();
     supabase
-      .from("app_state")
+      .from("household_state")
       .upsert({
-        user_id: userId,
-        data: latestState.current,
-        updated_at: new Date().toISOString(),
+        id: "household",
+        data: nextState,
+        updated_at: now,
+        updated_by_id: userId,
+        updated_by_name: userName,
       })
       .then(({ error }) => {
         setSaveStatus(error ? "error" : "saved");
-        if (error) console.error(error);
+        if (error) {
+          console.error(error);
+          return;
+        }
+        lastSavedState.current = nextState;
+        setLastEditedBy({ name: userName, at: now });
+        if (changes.length > 0) {
+          supabase
+            .from("activity_log")
+            .insert(changes.map((action) => ({ user_id: userId, user_name: userName, action })))
+            .then(({ error: logErr }) => { if (logErr) console.error(logErr); });
+        }
       });
-  }, [userId]);
+  }, [userId, userName]);
 
   useEffect(() => {
     if (isFirstRender.current) {
       isFirstRender.current = false;
       return;
     }
+    // While spectating, local state only ever changes because a remote
+    // update was just absorbed (applyLoadedState) — saving that straight
+    // back would falsely attribute the other person's edit to this
+    // account, so following is treated as read-only and skips the
+    // debounced save entirely. Sandbox edits are never saved either — the
+    // whole point is a detour that leaves the shared data untouched.
+    if (spectatingRef.current || sandboxActiveRef.current) return;
     setSaveStatus("saving");
     if (saveTimer.current) clearTimeout(saveTimer.current);
     saveTimer.current = setTimeout(flushSave, 700);
     return () => clearTimeout(saveTimer.current);
-  }, [debts, fixed, income, netIncome, includeRent, recurringExtra, strategy, targetDTI, mortgageEstimate, incomeSources, boosts, paidByMonth, debtBaseline, paycheckOverrides, flushSave]);
+  }, [debts, fixed, income, netIncome, includeRent, recurringExtra, strategy, targetDTI, mortgageEstimate, incomeSources, boosts, paycheckReserve, paidByMonth, debtBaseline, paycheckOverrides, flushSave]);
+
+  // Since this data is now shared between two people, the other person can
+  // save changes while this tab is open. If nothing here is mid-edit
+  // (no pending debounced save), or this session is actively spectating
+  // (read-only by design), it's safe to just absorb the update directly.
+  // While sandboxing, the local numbers are deliberately diverged from the
+  // real data, so a remote update is never auto-applied there either — it's
+  // just flagged, and gets picked up naturally on the next sandbox exit
+  // (which always re-syncs from the shared row anyway). Otherwise, rather
+  // than risk silently overwriting a local edit, flag that newer data
+  // exists and let the user choose when to reload for it.
+  useEffect(() => {
+    const channel = supabase
+      .channel("household_state_changes")
+      .on(
+        "postgres_changes",
+        { event: "UPDATE", schema: "public", table: "household_state", filter: "id=eq.household" },
+        (payload) => {
+          const row = payload.new;
+          if (!row || row.updated_by_id === userId) return;
+          setLastEditedBy({ name: row.updated_by_name, at: row.updated_at });
+          if (spectatingRef.current || (!sandboxActiveRef.current && !saveTimer.current)) {
+            applyLoadedState(row.data);
+          } else {
+            setRemoteChangePending(true);
+          }
+        }
+      )
+      .subscribe();
+    return () => { supabase.removeChannel(channel); };
+  }, [userId, applyLoadedState]);
 
   // Flush immediately when the tab is backgrounded/closed instead of losing a
   // pending debounced save — visibilitychange fires reliably before teardown,
@@ -251,11 +437,11 @@ function BillTracker({ saved, userId }) {
 
   const paycheckPlan = useMemo(() => {
     const billsForPlan = [
-      ...debts.filter((d) => d.isDebt !== false).map((d) => ({ id: d.id, name: d.name, monthly: d.monthly, dueDay: d.dueDay, graceDays: d.graceDays, splitFriendly: d.splitFriendly })),
-      ...fixed.map((f) => ({ id: f.id, name: f.name, monthly: f.monthly, dueDay: f.dueDay, graceDays: f.graceDays, splitFriendly: f.splitFriendly })),
+      ...debts.filter((d) => d.isDebt !== false).map((d) => ({ id: d.id, name: d.name, monthly: d.monthly, dueDay: d.dueDay, graceDays: d.graceDays, splitFriendly: d.splitFriendly, autopay: d.autopay, autopayFrequency: d.autopayFrequency, autopayAnchor: d.autopayAnchor, autopayAmount: d.autopayAmount })),
+      ...fixed.map((f) => ({ id: f.id, name: f.name, monthly: f.monthly, dueDay: f.dueDay, graceDays: f.graceDays, splitFriendly: f.splitFriendly, autopay: f.autopay, autopayFrequency: f.autopayFrequency, autopayAnchor: f.autopayAnchor, autopayAmount: f.autopayAmount })),
     ];
-    return buildPaycheckPlan(incomeSources, billsForPlan, 95, paidByMonth, paycheckOverrides);
-  }, [incomeSources, debts, fixed, paidByMonth, paycheckOverrides]);
+    return buildPaycheckPlan(incomeSources, billsForPlan, 95, paidByMonth, paycheckOverrides, Number(paycheckReserve) || 0);
+  }, [incomeSources, debts, fixed, paidByMonth, paycheckOverrides, paycheckReserve]);
 
   function overridePaycheckDate(sourceId, originalDate, newIsoDate) {
     const key = isoDate(originalDate);
@@ -275,6 +461,7 @@ function BillTracker({ saved, userId }) {
   // isn't wrongly crossed off too. Each paid item carries the exact
   // payment it came from, so toggling it off removes only that payment.
   function togglePaidFromPaycheckItem(item) {
+    if (item.autopay) return; // autopay settles itself — nothing to toggle manually
     const mKey = monthKeyOf(item.dueDate);
     if (item.paid && item.paymentId) {
       setPaidByMonth((prev) => removePaymentRecord(prev, mKey, item.billId, item.paymentId));
@@ -607,14 +794,71 @@ function BillTracker({ saved, userId }) {
             <h1 className="ctc-title">Clear to Close</h1>
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-            <span className="ctc-hint" style={{ minWidth: 64, textAlign: "right" }}>
-              {saveStatus === "saving" && "Saving…"}
-              {saveStatus === "saved" && "Saved"}
-              {saveStatus === "error" && <span style={{ color: "var(--brick)" }}>Couldn't save</span>}
-            </span>
-            <button className="btn btn-ghost btn-sm" onClick={() => supabase.auth.signOut()}><LogOut size={13} /> Sign out</button>
+            <div style={{ textAlign: "right" }}>
+              <div className="ctc-hint">
+                {saveStatus === "saving" && "Saving…"}
+                {saveStatus === "saved" && "Saved"}
+                {saveStatus === "error" && <span style={{ color: "var(--brick)" }}>Couldn't save</span>}
+              </div>
+              {lastEditedBy.name && (
+                <div className="ctc-hint" style={{ fontSize: 11 }}>
+                  Last edit: {lastEditedBy.name}{lastEditedBy.at ? ` · ${relativeTime(lastEditedBy.at)}` : ""}
+                </div>
+              )}
+            </div>
+            {!spectating && (
+              <button
+                className="btn btn-ghost btn-sm"
+                style={sandboxActive ? { background: "#E8B44A", borderColor: "#C99A2E" } : undefined}
+                onClick={sandboxActive ? exitSandbox : enterSandbox}
+                title="Try out numbers without affecting the real tracker"
+              >
+                <FlaskConical size={13} /> {sandboxActive ? "Exit sandbox" : "Sandbox"}
+              </button>
+            )}
+            <button className="btn btn-ghost btn-sm" onClick={() => supabase.auth.signOut()}><LogOut size={13} /> Sign out ({userName})</button>
           </div>
         </div>
+
+        <PresenceBar
+          onlineUsers={onlineUsers}
+          followingId={followingId}
+          followedByNames={followedByNames}
+          onFollow={handleFollow}
+          onUnfollow={unfollow}
+          disableFollow={sandboxActive}
+        />
+
+        <CursorOverlay leaderState={leaderState} currentPage={page} />
+        <NotesPanel userId={userId} userName={userName} />
+
+        {sandboxActive && (
+          <div style={{
+            marginTop: 10, padding: "10px 14px", borderRadius: 4, display: "flex", alignItems: "center",
+            justifyContent: "space-between", gap: 10, background: "#FBEBC7", border: "1px solid #E8B44A", color: "#6B4E14",
+          }}>
+            <span><FlaskConical size={14} style={{ verticalAlign: -2, marginRight: 6 }} />
+              Sandbox mode — play with the numbers freely. Nothing here saves, and it all reverts when you exit.
+            </span>
+            <button className="btn btn-primary btn-sm" onClick={exitSandbox}>Exit sandbox</button>
+          </div>
+        )}
+
+        {spectating && (
+          <div className="warning-box" style={{ marginTop: 10, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
+            <span>Watching {followingName || "their"} screen live — read-only while following.</span>
+            <button className="btn btn-primary btn-sm" onClick={unfollow}>Stop following</button>
+          </div>
+        )}
+
+        {remoteChangePending && !spectating && !sandboxActive && (
+          <div className="warning-box" style={{ marginTop: 10, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
+            <span>{lastEditedBy.name || "Someone"} just made changes elsewhere — reload to see them.</span>
+            <button className="btn btn-primary btn-sm" onClick={() => window.location.reload()}>Reload</button>
+          </div>
+        )}
+
+        <div style={{ pointerEvents: spectating ? "none" : undefined, userSelect: spectating ? "none" : undefined, opacity: spectating ? 0.85 : 1 }}>
 
         <div className="strategy-pills" style={{ marginTop: 10, marginBottom: 4, flexWrap: "wrap" }}>
           <button className={`pill ${page === "dashboard" ? "active" : ""}`} onClick={() => setPage("dashboard")}>Dashboard</button>
@@ -624,6 +868,7 @@ function BillTracker({ saved, userId }) {
           <button className={`pill ${page === "debts" ? "active" : ""}`} onClick={() => setPage("debts")}>Debts</button>
           <button className={`pill ${page === "fixed" ? "active" : ""}`} onClick={() => setPage("fixed")}>Fixed Expenses</button>
           <button className={`pill ${page === "monthly" ? "active" : ""}`} onClick={() => setPage("monthly")}>Monthly Plan</button>
+          <button className={`pill ${page === "activity" ? "active" : ""}`} onClick={() => setPage("activity")}>Activity</button>
         </div>
 
         {page === "dashboard" && (
@@ -1003,6 +1248,19 @@ function BillTracker({ saved, userId }) {
               </div>
             ))}
 
+            <div className="field" style={{ maxWidth: 260, marginBottom: 14 }}>
+              <label>Reserve per paycheck (gas &amp; groceries)</label>
+              <input
+                type="number"
+                min="0"
+                value={paycheckReserve}
+                onChange={(e) => setPaycheckReserve(e.target.value === "" ? "" : Number(e.target.value))}
+              />
+              <div className="ctc-hint" style={{ marginTop: 4 }}>
+                Held back from every check before bills are assigned — never counted as available to spend down.
+              </div>
+            </div>
+
             {paycheckPlan.noIncome ? (
               <div className="ctc-hint" style={{ marginTop: 8 }}>Add an amount and a next pay date above to see your plan.</div>
             ) : (
@@ -1067,18 +1325,23 @@ function BillTracker({ saved, userId }) {
                           <div
                             className="paycheck-item"
                             key={`${it.billId}-${idx}`}
-                            style={{ cursor: "pointer", opacity: it.paid ? 0.6 : 1 }}
-                            title={it.paid ? "Mark unpaid" : "Mark paid"}
+                            style={{ cursor: it.autopay ? "default" : "pointer", opacity: it.settled ? 0.6 : 1 }}
+                            title={it.autopay ? (it.settled ? "Autopay — already debited" : "Autopay — scheduled, will debit automatically") : (it.paid ? "Mark unpaid" : "Mark paid")}
                             onClick={() => togglePaidFromPaycheckItem(it)}
                           >
-                            <span style={{ textDecoration: it.paid ? "line-through" : "none" }}>
-                              {it.paid && <CheckCircle2 size={12} color="var(--pine-deep)" style={{ marginRight: 4, verticalAlign: -1 }} />}
+                            <span style={{ textDecoration: it.settled ? "line-through" : "none" }}>
+                              {it.settled && <CheckCircle2 size={12} color="var(--pine-deep)" style={{ marginRight: 4, verticalAlign: -1 }} />}
+                              {it.paid && !it.settled && <Clock size={12} color="var(--brass-deep)" style={{ marginRight: 4, verticalAlign: -1 }} />}
                               {it.name}{it.split ? <span className="split-badge">{it.splitLabel}</span> : null}
+                              {it.autopay && <span className="split-badge" title="Autopay">Autopay</span>}
                             </span>
-                            <span className="ctc-mono" style={{ textDecoration: it.paid ? "line-through" : "none" }}>{money(it.amount)}</span>
+                            <span className="ctc-mono" style={{ textDecoration: it.settled ? "line-through" : "none" }}>{money(it.amount)}</span>
                           </div>
                         ))}
                       </div>
+                      {p.reserved > 0 && (
+                        <div className="ctc-hint" style={{ marginTop: 4 }}>{money(p.reserved)} reserved for gas &amp; groceries</div>
+                      )}
                       <div className={`paycheck-leftover ${p.remaining < 0 ? "brick" : "pine"}`}>
                         {p.remaining < 0 ? "Short " : "Left over "}
                         <span className="ctc-mono">{money(Math.abs(p.remaining))}</span>
@@ -1134,6 +1397,7 @@ function BillTracker({ saved, userId }) {
                         <th style={{ width: "8%" }} title="Days after due date before it's actually late">Grace</th>
                         <th style={{ width: "9%" }} title="Counts toward your debt-free projection">Goal</th>
                         <th style={{ width: "8%" }} title="OK to split across this month's paychecks with no real downside">Split OK</th>
+                        <th style={{ width: 30 }} title="Autopay"></th>
                         <th style={{ width: 30 }}></th>
                       </tr>
                     </thead>
@@ -1156,6 +1420,11 @@ function BillTracker({ saved, userId }) {
                           </td>
                           <td style={{ textAlign: "center" }}>
                             <input type="checkbox" checked={!!d.splitFriendly} onChange={(e) => updateDebt(d.id, { splitFriendly: e.target.checked })} title="OK to split across this month's paychecks with no real downside" />
+                          </td>
+                          <td>
+                            <button className="btn-ghost btn-sm" style={{ border: "none" }} title={d.autopay ? "Autopay on" : "Set up autopay"} onClick={() => setEditingAutopay({ kind: "debt", item: d })}>
+                              <Zap size={14} color={d.autopay ? "var(--brass-deep)" : "var(--ink-soft)"} fill={d.autopay ? "var(--brass-deep)" : "none"} />
+                            </button>
                           </td>
                           <td><button className="btn-ghost btn-sm" style={{ border: "none" }} onClick={() => removeDebt(d.id)}><Trash2 size={14} color="#A5473A" /></button></td>
                         </tr>
@@ -1188,6 +1457,7 @@ function BillTracker({ saved, userId }) {
                         <th style={{ width: "8%" }}>Grace</th>
                         <th style={{ width: "9%" }} title="Counts toward your debt-free projection">Goal</th>
                         <th style={{ width: "8%" }} title="OK to split across this month's paychecks with no real downside">Split OK</th>
+                        <th style={{ width: 30 }} title="Autopay"></th>
                         <th style={{ width: 30 }}></th>
                       </tr>
                     </thead>
@@ -1209,6 +1479,11 @@ function BillTracker({ saved, userId }) {
                           </td>
                           <td style={{ textAlign: "center" }}>
                             <input type="checkbox" checked={!!d.splitFriendly} onChange={(e) => updateDebt(d.id, { splitFriendly: e.target.checked })} title="OK to split across this month's paychecks with no real downside" />
+                          </td>
+                          <td>
+                            <button className="btn-ghost btn-sm" style={{ border: "none" }} title={d.autopay ? "Autopay on" : "Set up autopay"} onClick={() => setEditingAutopay({ kind: "debt", item: d })}>
+                              <Zap size={14} color={d.autopay ? "var(--brass-deep)" : "var(--ink-soft)"} fill={d.autopay ? "var(--brass-deep)" : "none"} />
+                            </button>
                           </td>
                           <td><button className="btn-ghost btn-sm" style={{ border: "none" }} onClick={() => removeDebt(d.id)}><Trash2 size={14} color="#A5473A" /></button></td>
                         </tr>
@@ -1243,6 +1518,7 @@ function BillTracker({ saved, userId }) {
                   <th style={{ width: "8%" }}>Grace</th>
                   <th style={{ width: "8%" }} title="OK to split across this month's paychecks with no real downside">Split OK</th>
                   <th>Note</th>
+                  <th style={{ width: 30 }} title="Autopay"></th>
                   <th style={{ width: 30 }}></th>
                 </tr>
               </thead>
@@ -1262,6 +1538,11 @@ function BillTracker({ saved, userId }) {
                       <input type="checkbox" checked={!!f.splitFriendly} onChange={(e) => updateFixed(f.id, { splitFriendly: e.target.checked })} title="OK to split across this month's paychecks with no real downside" />
                     </td>
                     <td><input value={f.note} placeholder="—" onChange={(e) => updateFixed(f.id, { note: e.target.value })} /></td>
+                    <td>
+                      <button className="btn-ghost btn-sm" style={{ border: "none" }} title={f.autopay ? "Autopay on" : "Set up autopay"} onClick={() => setEditingAutopay({ kind: "fixed", item: f })}>
+                        <Zap size={14} color={f.autopay ? "var(--brass-deep)" : "var(--ink-soft)"} fill={f.autopay ? "var(--brass-deep)" : "none"} />
+                      </button>
+                    </td>
                     <td><button className="btn-ghost btn-sm" style={{ border: "none" }} onClick={() => removeFixed(f.id)}><Trash2 size={14} color="#A5473A" /></button></td>
                   </tr>
                 ))}
@@ -1281,6 +1562,10 @@ function BillTracker({ saved, userId }) {
           />
         )}
 
+        {page === "activity" && <ActivityFeed refreshKey={remoteChangePending} />}
+
+        </div>
+
         <div className="footnote">
           Balances shown as "—" haven't been entered yet. Interest accrues monthly only where you've set an APR — otherwise
           minimum payments are treated as pure principal reduction. DTI reference bands (36% / 43%) are common general
@@ -1291,6 +1576,13 @@ function BillTracker({ saved, userId }) {
 
       {showAddDebt && <AddDebtModal onClose={() => setShowAddDebt(false)} onAdd={addDebt} />}
       {showAddFixed && <AddFixedModal onClose={() => setShowAddFixed(false)} onAdd={addFixed} />}
+      {editingAutopay && (
+        <AutopaySettingsModal
+          item={editingAutopay.item}
+          onClose={() => setEditingAutopay(null)}
+          onSave={(patch) => (editingAutopay.kind === "debt" ? updateDebt : updateFixed)(editingAutopay.item.id, patch)}
+        />
+      )}
     </div>
   );
 }
@@ -1299,6 +1591,57 @@ function ordinal(n) {
   const s = ["th", "st", "nd", "rd"];
   const v = n % 100;
   return n + (s[(v - 20) % 10] || s[v] || s[0]);
+}
+
+// A feed of who did what, most recent first — the "who made what edits"
+// record that the shared household row alone can't show (that row only
+// ever has the very latest name attached to it, not a history).
+function ActivityFeed({ refreshKey }) {
+  const [entries, setEntries] = useState(null); // null = loading
+  const [loadError, setLoadError] = useState(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    supabase
+      .from("activity_log")
+      .select("id, user_name, action, created_at")
+      .order("created_at", { ascending: false })
+      .limit(100)
+      .then(({ data, error }) => {
+        if (cancelled) return;
+        if (error) {
+          console.error(error);
+          setLoadError("Couldn't load activity — the activity_log table may be missing (see supabase/shared_data_migration.sql).");
+          setEntries([]);
+          return;
+        }
+        setEntries(data || []);
+      });
+    return () => { cancelled = true; };
+  }, [refreshKey]);
+
+  return (
+    <div style={{ marginTop: 4 }}>
+      <div className="ctc-section-head" style={{ marginTop: 18 }}>
+        <div className="ctc-h2"><Clock size={18} /> Activity</div>
+      </div>
+      <div className="card">
+        {loadError && <div className="ctc-hint" style={{ color: "var(--brick)" }}>{loadError}</div>}
+        {entries === null && !loadError && <div className="ctc-hint">Loading…</div>}
+        {entries && entries.length === 0 && !loadError && <div className="ctc-hint">No edits logged yet.</div>}
+        {entries && entries.length > 0 && (
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            {entries.map((e) => (
+              <div key={e.id} style={{ display: "flex", justifyContent: "space-between", gap: 10, paddingBottom: 8, borderBottom: "1px dashed var(--line)" }}>
+                <span style={{ fontSize: 13 }}><strong>{e.user_name}</strong> {e.action}</span>
+                <span className="ctc-hint" style={{ whiteSpace: "nowrap" }}>{relativeTime(e.created_at)}</span>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
 }
 
 function MonthlyPlan({ debtBills, fixed, paidByMonth, setPaidByMonth }) {
@@ -1325,7 +1668,7 @@ function MonthlyPlan({ debtBills, fixed, paidByMonth, setPaidByMonth }) {
   const progressPct = totalMonthly > 0 ? (paidTotal / totalMonthly) * 100 : 0;
   const fullyPaidCount = items.filter((it) => {
     const rec = getPaymentRecord(monthEntry, it);
-    return Number(it.monthly || 0) > 0 && rec.amountPaid >= Number(it.monthly || 0);
+    return Number(it.monthly || 0) > 0 && rec.settledAmount >= Number(it.monthly || 0);
   }).length;
 
   function addPayment(item, amount, date) {
@@ -1344,8 +1687,19 @@ function MonthlyPlan({ debtBills, fixed, paidByMonth, setPaidByMonth }) {
   function toggleFullyPaid(item) {
     const rec = getPaymentRecord(monthEntry, item);
     const monthly = Number(item.monthly || 0);
-    if (rec.amountPaid >= monthly && monthly > 0) {
+    if (rec.settledAmount >= monthly && monthly > 0) {
+      // Already fully settled — unmark it entirely.
       setPaidByMonth((prev) => clearPaymentRecord(prev, monthKey, item.id));
+    } else if (rec.amountPaid >= monthly && monthly > 0) {
+      // Already fully scheduled, just not settled yet — settle the
+      // existing payment(s) instead of logging a second, redundant one.
+      setPaidByMonth((prev) => {
+        let next = prev;
+        for (const p of rec.payments) {
+          if (!isPaymentSettled(p)) next = updatePaymentRecord(next, monthKey, item.id, p.id, { cleared: true });
+        }
+        return next;
+      });
     } else {
       addPayment(item, monthly - rec.amountPaid);
     }
@@ -1406,13 +1760,14 @@ function BillPaymentCard({ item, rec, onToggleFull, onAddPayment, onRemovePaymen
   const [draftDate, setDraftDate] = useState(() => isoDate(new Date()));
 
   const monthly = Number(item.monthly || 0);
-  const fullyPaid = monthly > 0 && rec.amountPaid >= monthly;
-  const partial = rec.amountPaid > 0 && !fullyPaid;
-  const billRemaining = Math.max(0, monthly - rec.amountPaid);
+  const fullyPaid = monthly > 0 && rec.settledAmount >= monthly;
+  const partial = rec.settledAmount > 0 && !fullyPaid;
+  const pendingAmount = Math.max(0, rec.amountPaid - rec.settledAmount);
 
   let icon;
   if (fullyPaid) icon = <CheckCircle2 size={20} color="var(--pine-deep)" />;
   else if (partial) icon = <Circle size={20} color="var(--brass-deep)" fill="var(--brass-deep)" fillOpacity={0.25} />;
+  else if (pendingAmount > 0.005) icon = <Clock size={20} color="var(--brass-deep)" />;
   else icon = <Circle size={20} color="var(--line)" />;
 
   function submitDraft() {
@@ -1432,7 +1787,8 @@ function BillPaymentCard({ item, rec, onToggleFull, onAddPayment, onRemovePaymen
         <div style={{ flex: 1 }}>
           <div style={{ fontWeight: 600, fontSize: 14, textDecoration: fullyPaid ? "line-through" : "none" }}>{item.name}</div>
           {item.dueDay != null && <div className="ctc-hint">Due the {ordinal(item.dueDay)}</div>}
-          {partial && <div className="ctc-hint" style={{ color: "var(--brass-deep)", fontWeight: 600 }}>Partial — {money(billRemaining)} remaining</div>}
+          {partial && <div className="ctc-hint" style={{ color: "var(--brass-deep)", fontWeight: 600 }}>Partial — {money(Math.max(0, monthly - rec.settledAmount))} remaining</div>}
+          {pendingAmount > 0.005 && <div className="ctc-hint" style={{ color: "var(--brass-deep)" }}>Scheduled — {money(pendingAmount)} not yet settled</div>}
         </div>
         <div style={{ textAlign: "right" }}>
           <div className="ctc-mono" style={{ fontWeight: 600 }}>{money(rec.amountPaid)}</div>

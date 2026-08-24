@@ -246,32 +246,49 @@ export function monthKeyOf(date) {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
 }
 
+// A payment counts as money that's actually left the account — "settled" —
+// once its date is today or earlier, or it's been manually checked
+// "Cleared". A future-dated, unconfirmed payment is real (it's on the
+// books, and reduces what's available to spend) but isn't settled yet: it
+// shouldn't read as done until one of those becomes true.
+export function isPaymentSettled(payment, today = new Date()) {
+  if (payment.cleared) return true;
+  if (!payment.date) return false;
+  const t = new Date(today);
+  t.setHours(0, 0, 0, 0);
+  const d = new Date(payment.date + "T00:00:00");
+  return d <= t;
+}
+
 // Normalizes a stored Monthly Plan payment record for one bill in one
 // month. Older saved data stored a plain `true`/`false` here (from before
 // partial payments existed) — read as fully paid / not paid so nothing
-// breaks.
+// breaks; those predate settlement tracking entirely, so they're treated
+// as already cleared rather than newly "scheduled".
 // A bill/month's payment record is a list of individual payments — each
 // with its own amount, date, cleared status, and bank — so a bill split
 // across several partial payments (or several paychecks) can be tracked
 // piece by piece instead of one all-or-nothing total. `amountPaid` is
-// derived as the sum, kept for callers that just need the running total.
+// derived as the sum of every payment (what's committed); `settledAmount`
+// is the sum of only the payments that have actually happened.
 export function getPaymentRecord(monthEntry, item) {
   const raw = (monthEntry || {})[item.id];
   if (raw && typeof raw === "object" && Array.isArray(raw.payments)) {
     const amountPaid = raw.payments.reduce((s, p) => s + (Number(p.amount) || 0), 0);
-    return { payments: raw.payments, amountPaid };
+    const settledAmount = raw.payments.reduce((s, p) => s + (isPaymentSettled(p) ? Number(p.amount) || 0 : 0), 0);
+    return { payments: raw.payments, amountPaid, settledAmount };
   }
   // Older saved shapes, from before multiple partial payments existed.
   if (raw && typeof raw === "object") {
     const amt = Number(raw.amountPaid) || 0;
-    const payments = amt > 0.005 ? [{ id: "legacy", amount: amt, date: raw.paidDate || null, cleared: !!raw.cleared, bank: raw.bank || "" }] : [];
-    return { payments, amountPaid: amt };
+    const payments = amt > 0.005 ? [{ id: "legacy", amount: amt, date: raw.paidDate || null, cleared: true, bank: raw.bank || "" }] : [];
+    return { payments, amountPaid: amt, settledAmount: amt };
   }
   if (raw === true) {
     const amt = Number(item.monthly) || 0;
-    return { payments: amt > 0.005 ? [{ id: "legacy", amount: amt, date: null, cleared: false, bank: "" }] : [], amountPaid: amt };
+    return { payments: amt > 0.005 ? [{ id: "legacy", amount: amt, date: null, cleared: true, bank: "" }] : [], amountPaid: amt, settledAmount: amt };
   }
-  return { payments: [], amountPaid: 0 };
+  return { payments: [], amountPaid: 0, settledAmount: 0 };
 }
 
 function newPaymentId() {
@@ -390,6 +407,9 @@ export function generatePaychecks(incomeSources, horizonDays, overrides = {}) {
 }
 
 // All upcoming due-date instances for every bill that has a due day set, within the horizon.
+// A biweekly-autopay bill doesn't have a single monthly due day — it's
+// handled separately by generateAutopayInstances — so it's skipped here
+// even if a dueDay happens to be set, to avoid reserving it twice.
 export function generateBillInstances(bills, horizonDays) {
   const today = new Date();
   today.setHours(0, 0, 0, 0);
@@ -397,6 +417,7 @@ export function generateBillInstances(bills, horizonDays) {
   horizonEnd.setDate(horizonEnd.getDate() + horizonDays);
   const instances = [];
   for (const b of bills) {
+    if (b.autopay && b.autopayFrequency === "biweekly") continue;
     if (!b.dueDay || !(Number(b.monthly) > 0)) continue;
     let cursor = new Date(today.getFullYear(), today.getMonth(), 1);
     for (let i = 0; i < 5; i++) {
@@ -404,12 +425,47 @@ export function generateBillInstances(bills, horizonDays) {
       const deadline = new Date(dd);
       deadline.setDate(deadline.getDate() + Number(b.graceDays || 0));
       if (deadline >= today && dd <= horizonEnd) {
-        instances.push({ billId: b.id, name: b.name, amount: Number(b.monthly || 0), dueDate: dd, deadline, graceDays: Number(b.graceDays || 0), splitFriendly: !!b.splitFriendly });
+        instances.push({ billId: b.id, name: b.name, amount: Number(b.monthly || 0), dueDate: dd, deadline, graceDays: Number(b.graceDays || 0), splitFriendly: !!b.splitFriendly, autopay: !!b.autopay });
       }
       cursor.setMonth(cursor.getMonth() + 1);
     }
   }
   instances.sort((a, b) => a.deadline - b.deadline);
+  return instances;
+}
+
+// Occurrences for a biweekly-autopay bill: same amount every 14 days,
+// anchored to a start date so it keeps landing on the same weekday no
+// matter how the calendar falls — mirroring how biweekly paychecks are
+// generated. Includes the single most-recent past occurrence (like
+// generatePaychecks) plus every future one within the horizon, so a
+// slightly stale anchor still shows the current cycle correctly.
+export function generateAutopayInstances(bills, horizonDays) {
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const horizonEnd = new Date(today);
+  horizonEnd.setDate(horizonEnd.getDate() + horizonDays);
+  const instances = [];
+  for (const b of bills) {
+    if (!b.autopay || b.autopayFrequency !== "biweekly" || !b.autopayAnchor) continue;
+    const amount = Number(b.autopayAmount ?? Number(b.monthly || 0) / 2);
+    if (!(amount > 0)) continue;
+    let d = new Date(b.autopayAnchor + "T00:00:00");
+    let guard = 0;
+    const occurrences = [];
+    while (d <= horizonEnd && guard < 300) {
+      occurrences.push(new Date(d));
+      d = advanceByFrequency(d, "biweekly");
+      guard++;
+    }
+    const future = occurrences.filter((dt) => dt >= today);
+    const mostRecentPast = occurrences.filter((dt) => dt < today).sort((a, c) => c - a)[0];
+    const chosen = mostRecentPast ? [mostRecentPast, ...future] : future;
+    for (const dt of chosen) {
+      instances.push({ billId: b.id, name: b.name, amount, dueDate: dt, deadline: dt, graceDays: 0, splitFriendly: false, autopay: true });
+    }
+  }
+  instances.sort((a, b2) => a.deadline - b2.deadline);
   return instances;
 }
 
@@ -425,15 +481,26 @@ export function generateBillInstances(bills, horizonDays) {
 // across every paycheck in their grace window right away (in half, thirds, however many
 // checks are eligible), since paying them that way has no real downside for the user — this
 // frees up whole-check capacity for bills that genuinely need to land on a single check.
-export function buildPaycheckPlan(incomeSources, bills, horizonDays = 95, paidByMonth = {}, paycheckOverrides = {}) {
+export function buildPaycheckPlan(incomeSources, bills, horizonDays = 95, paidByMonth = {}, paycheckOverrides = {}, reservePerCheck = 0) {
   const paychecks = generatePaychecks(incomeSources, horizonDays, paycheckOverrides);
-  const rawInstances = generateBillInstances(bills, horizonDays);
-  const unscheduled = bills.filter((b) => b.isDebt !== false && !b.dueDay && Number(b.monthly) > 0);
+  const rawInstances = [...generateBillInstances(bills, horizonDays), ...generateAutopayInstances(bills, horizonDays)];
+  const unscheduled = bills.filter((b) => b.isDebt !== false && !b.dueDay && Number(b.monthly) > 0 && !(b.autopay && b.autopayFrequency === "biweekly"));
   const shortfalls = [];
   const lateButInGrace = [];
 
   if (paychecks.length === 0) {
     return { paychecks, unscheduled, shortfalls, lateButInGrace, noIncome: true };
+  }
+
+  // The reserve is carved out of each check's spendable capacity before any
+  // bill gets assigned, so it's never something bills can eat into — a
+  // check's "remaining" (leftover) always already excludes it.
+  const reserve = Math.max(0, Number(reservePerCheck) || 0);
+  if (reserve > 0) {
+    for (const p of paychecks) {
+      p.reserved = reserve;
+      p.remaining -= reserve;
+    }
   }
 
   // Bills already recorded as paid on the Monthly Plan still show up on
@@ -457,10 +524,10 @@ export function buildPaycheckPlan(incomeSources, bills, horizonDays = 95, paidBy
     return priorChecks.length ? priorChecks[priorChecks.length - 1] : null;
   }
 
-  function recordPaidItem(check, billId, name, amount, dueDate, deadline, paymentId) {
+  function recordPaidItem(check, billId, name, amount, dueDate, deadline, paymentId, settled, autopay) {
     if (!check) return; // paid before any known paycheck — not this plan's to show
     check.remaining -= amount;
-    check.items.push({ billId, name, amount: Math.round(amount * 100) / 100, dueDate, deadline, split: false, paid: true, paymentId });
+    check.items.push({ billId, name, amount: Math.round(amount * 100) / 100, dueDate, deadline, split: false, paid: true, settled, autopay: !!autopay, paymentId });
   }
 
   const handledBillMonths = new Set();
@@ -468,6 +535,15 @@ export function buildPaycheckPlan(incomeSources, bills, horizonDays = 95, paidBy
   for (const inst of rawInstances) {
     const mKey = monthKeyOf(inst.dueDate);
     handledBillMonths.add(`${inst.billId}|${mKey}`);
+
+    // Autopay debits itself on schedule — once its date arrives, that
+    // money is already gone whether or not anyone logged it, so it's
+    // recorded as settled directly instead of waiting on a manual payment.
+    if (inst.autopay && inst.dueDate <= today) {
+      recordPaidItem(sourceCheckFor(isoDate(inst.dueDate)), inst.billId, inst.name, inst.amount, inst.dueDate, inst.deadline, `autopay-${inst.billId}-${isoDate(inst.dueDate)}`, true, true);
+      continue;
+    }
+
     const monthEntry = paidByMonth[mKey] || {};
     const rec = getPaymentRecord(monthEntry, { id: inst.billId, monthly: inst.amount });
     // Each individual payment is attributed to whichever paycheck it
@@ -479,7 +555,7 @@ export function buildPaycheckPlan(incomeSources, bills, horizonDays = 95, paidBy
       if (allocated >= inst.amount - 0.005) break;
       const amt = Math.min(Number(pmt.amount) || 0, inst.amount - allocated);
       if (amt > 0.005) {
-        recordPaidItem(sourceCheckFor(pmt.date), inst.billId, inst.name, amt, inst.dueDate, inst.deadline, pmt.id);
+        recordPaidItem(sourceCheckFor(pmt.date), inst.billId, inst.name, amt, inst.dueDate, inst.deadline, pmt.id, isPaymentSettled(pmt));
         allocated += amt;
       }
     }
@@ -505,7 +581,7 @@ export function buildPaycheckPlan(incomeSources, bills, horizonDays = 95, paidBy
       const amt = Number(pmt.amount) || 0;
       if (amt > 0.005) {
         const paidOn = pmt.date ? new Date(pmt.date + "T00:00:00") : today;
-        recordPaidItem(sourceCheckFor(pmt.date), bill.id, bill.name, amt, paidOn, paidOn, pmt.id);
+        recordPaidItem(sourceCheckFor(pmt.date), bill.id, bill.name, amt, paidOn, paidOn, pmt.id, isPaymentSettled(pmt));
       }
     }
   }
@@ -520,7 +596,7 @@ export function buildPaycheckPlan(incomeSources, bills, horizonDays = 95, paidBy
     const bestFit = pool.find((p) => p.remaining >= inst.amount);
     if (bestFit) {
       bestFit.remaining -= inst.amount;
-      bestFit.items.push({ billId: inst.billId, name: inst.name, amount: inst.amount, dueDate: inst.dueDate, deadline: inst.deadline, split: false });
+      bestFit.items.push({ billId: inst.billId, name: inst.name, amount: inst.amount, dueDate: inst.dueDate, deadline: inst.deadline, split: false, autopay: !!inst.autopay });
       flagIfLate(inst, bestFit.date);
       return;
     }
@@ -549,6 +625,7 @@ export function buildPaycheckPlan(incomeSources, bills, horizonDays = 95, paidBy
       part.p.items.push({
         billId: inst.billId, name: inst.name, amount: Math.round(part.amt * 100) / 100,
         dueDate: inst.dueDate, deadline: inst.deadline, split, splitLabel: split ? `part ${idx + 1} of ${parts.length}` : undefined,
+        autopay: !!inst.autopay,
       });
       if (part.p.date > latestDate) latestDate = part.p.date;
     });
@@ -569,6 +646,7 @@ export function buildPaycheckPlan(incomeSources, bills, horizonDays = 95, paidBy
         const item = {
           billId: inst.billId, name: inst.name, amount: Math.round(amt * 100) / 100,
           dueDate: inst.dueDate, deadline: inst.deadline, split: pool.length > 1, splitLabel: pool.length > 1 ? `part ${idx + 1} of ${pool.length}` : undefined,
+          autopay: !!inst.autopay,
         };
         p.items.push(item);
         addedItems.push(item);
