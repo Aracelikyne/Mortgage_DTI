@@ -617,7 +617,7 @@ function BillTracker({ saved, userId, userName, initialLastEditedBy }) {
         }
         .ctc-app * { box-sizing: border-box; }
         .ctc-mono { font-family: 'IBM Plex Mono', monospace; font-variant-numeric: tabular-nums; }
-        .ctc-shell { max-width: 980px; margin: 0 auto; }
+        .ctc-shell { max-width: 1400px; margin: 0 auto; }
 
         .ctc-eyebrow {
           font-family: 'IBM Plex Mono', monospace;
@@ -728,16 +728,18 @@ function BillTracker({ saved, userId, userName, initialLastEditedBy }) {
         .sugg-row { display: flex; justify-content: space-between; font-size: 13.5px; padding: 6px 0; border-bottom: 1px solid #EFE9D9; }
         .sugg-row:last-child { border-bottom: none; }
 
-        table.ledger { width: 100%; border-collapse: collapse; font-size: 13px; }
+        table.ledger { width: 100%; table-layout: fixed; border-collapse: collapse; font-size: 13px; }
         table.ledger th {
           text-align: left; font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.05em;
           color: var(--ink-soft); font-weight: 600; padding: 6px 8px; border-bottom: 1px solid var(--line);
+          overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
         }
-        table.ledger td { padding: 7px 8px; border-bottom: 1px solid #EFE9D9; }
+        table.ledger td { padding: 7px 8px; border-bottom: 1px solid #EFE9D9; overflow: hidden; }
         table.ledger input, table.ledger select {
-          width: 100%; min-width: 36px; border: 1px solid transparent; background: transparent; padding: 4px 5px; border-radius: 3px;
+          width: 100%; min-width: 0; border: 1px solid transparent; background: transparent; padding: 4px 5px; border-radius: 3px;
           font-family: 'IBM Plex Mono', monospace; font-size: 13px; color: var(--ink);
         }
+        table.ledger input[type="number"] { padding-right: 2px; }
         table.ledger input:hover, table.ledger select:hover { border-color: var(--line); }
         table.ledger input:focus, table.ledger select:focus { outline: none; border-color: var(--brass); background: #fff; }
         table.ledger select { font-family: 'Inter', sans-serif; }
@@ -1388,15 +1390,15 @@ function BillTracker({ saved, userId, userName, initialLastEditedBy }) {
                   <table className="ledger">
                     <thead>
                       <tr>
-                        <th style={{ width: "18%" }}>Name</th>
-                        <th style={{ width: "14%" }}>Type</th>
-                        <th>Monthly</th>
-                        <th>Balance</th>
-                        <th>APR %</th>
-                        <th style={{ width: "10%" }}>Due day</th>
-                        <th style={{ width: "8%" }} title="Days after due date before it's actually late">Grace</th>
-                        <th style={{ width: "9%" }} title="Counts toward your debt-free projection">Goal</th>
-                        <th style={{ width: "8%" }} title="OK to split across this month's paychecks with no real downside">Split OK</th>
+                        <th style={{ width: "21%" }}>Name</th>
+                        <th style={{ width: "13%" }}>Type</th>
+                        <th style={{ width: "9%" }}>Monthly</th>
+                        <th style={{ width: "12%" }}>Balance</th>
+                        <th style={{ width: "9%" }}>APR %</th>
+                        <th style={{ width: "7%" }}>Due day</th>
+                        <th style={{ width: "6%" }} title="Days after due date before it's actually late">Grace</th>
+                        <th style={{ width: "7%" }} title="Counts toward your debt-free projection">Goal</th>
+                        <th style={{ width: "7%" }} title="OK to split across this month's paychecks with no real downside">Split OK</th>
                         <th style={{ width: 30 }} title="Autopay"></th>
                         <th style={{ width: 30 }}></th>
                       </tr>
@@ -1449,13 +1451,13 @@ function BillTracker({ saved, userId, userName, initialLastEditedBy }) {
                   <table className="ledger">
                     <thead>
                       <tr>
-                        <th style={{ width: "20%" }}>Name</th>
+                        <th style={{ width: "24%" }}>Name</th>
                         <th style={{ width: "14%" }}>Type</th>
-                        <th>Monthly</th>
-                        <th>Balance</th>
-                        <th style={{ width: "10%" }}>Due day</th>
-                        <th style={{ width: "8%" }}>Grace</th>
-                        <th style={{ width: "9%" }} title="Counts toward your debt-free projection">Goal</th>
+                        <th style={{ width: "10%" }}>Monthly</th>
+                        <th style={{ width: "14%" }}>Balance</th>
+                        <th style={{ width: "8%" }}>Due day</th>
+                        <th style={{ width: "7%" }}>Grace</th>
+                        <th style={{ width: "8%" }} title="Counts toward your debt-free projection">Goal</th>
                         <th style={{ width: "8%" }} title="OK to split across this month's paychecks with no real downside">Split OK</th>
                         <th style={{ width: 30 }} title="Autopay"></th>
                         <th style={{ width: 30 }}></th>
@@ -1511,13 +1513,13 @@ function BillTracker({ saved, userId, userName, initialLastEditedBy }) {
             <table className="ledger">
               <thead>
                 <tr>
-                  <th style={{ width: "18%" }}>Name</th>
-                  <th style={{ width: "13%" }}>Type</th>
-                  <th>Monthly</th>
-                  <th style={{ width: "10%" }}>Due day</th>
-                  <th style={{ width: "8%" }}>Grace</th>
+                  <th style={{ width: "20%" }}>Name</th>
+                  <th style={{ width: "12%" }}>Type</th>
+                  <th style={{ width: "10%" }}>Monthly</th>
+                  <th style={{ width: "8%" }}>Due day</th>
+                  <th style={{ width: "7%" }}>Grace</th>
                   <th style={{ width: "8%" }} title="OK to split across this month's paychecks with no real downside">Split OK</th>
-                  <th>Note</th>
+                  <th style={{ width: "28%" }}>Note</th>
                   <th style={{ width: 30 }} title="Autopay"></th>
                   <th style={{ width: 30 }}></th>
                 </tr>
