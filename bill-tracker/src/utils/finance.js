@@ -106,6 +106,81 @@ export function monthlyInterest(balance, apr) {
   return balance * (apr / 100 / 12);
 }
 
+// Every account's stored balance is accurate as of this date, already
+// reflecting every payment made through it. Only payments dated strictly
+// after this anchor reduce the running balance below — earlier payments
+// are already baked into the stored figure and would double-count.
+export const BALANCE_ANCHOR_DATE = "2026-08-22";
+
+// Walks a debt's payment history since the anchor date, splitting each
+// payment into interest (accrued on the balance at that point) and
+// principal, in order, so the running balance reflects what's actually
+// been paid down rather than the static number originally typed in.
+// Missing APR: the whole payment goes to principal, and the result is
+// flagged as an estimate. A payment smaller than the interest it's meant
+// to cover doesn't get clamped — the shortfall grows the balance instead,
+// and `growing` is set so that isn't hidden from the user.
+export function computeRunningBalance(debt, allPayments) {
+  const hasStartingBalance = debt.balance !== null && debt.balance !== undefined;
+  if (!hasStartingBalance) {
+    return { balance: debt.balance, principalPaid: 0, isEstimate: false, growing: false };
+  }
+
+  const anchor = new Date(BALANCE_ANCHOR_DATE + "T00:00:00");
+  const hasApr = debt.apr !== null && debt.apr !== undefined && Number(debt.apr) > 0;
+
+  const relevant = allPayments
+    .filter((p) => p.date && new Date(p.date + "T00:00:00") > anchor)
+    .slice()
+    .sort((a, b) => new Date(a.date + "T00:00:00") - new Date(b.date + "T00:00:00"));
+
+  let balance = Number(debt.balance);
+  let principalPaid = 0;
+  let growing = false;
+
+  for (const p of relevant) {
+    const amount = Number(p.amount) || 0;
+    if (amount <= 0) continue;
+    const interest = hasApr ? monthlyInterest(balance, Number(debt.apr)) : 0;
+    const principal = amount - interest;
+    if (principal < 0) growing = true;
+    balance = Math.max(0, balance - principal);
+    principalPaid += principal;
+  }
+
+  return { balance, principalPaid, isEstimate: !hasApr, growing };
+}
+
+// Flattens every payment recorded anywhere in paidByMonth for one bill,
+// across every month — a running balance needs the bill's whole payment
+// history since the anchor, not just whichever month is being viewed.
+export function allPaymentsForBill(paidByMonth, billId) {
+  const out = [];
+  for (const monthEntry of Object.values(paidByMonth)) {
+    const raw = monthEntry[billId];
+    if (raw && typeof raw === "object" && Array.isArray(raw.payments)) {
+      out.push(...raw.payments);
+    } else if (raw && typeof raw === "object" && raw.amountPaid > 0) {
+      out.push({ amount: raw.amountPaid, date: raw.paidDate || null });
+    } else if (raw === true) {
+      // legacy boolean records have no bill context here; skipped — they
+      // predate running balances entirely and were paid before the anchor.
+    }
+  }
+  return out;
+}
+
+// Computes the running balance for every debt at once, keyed by id — the
+// shared entry point the UI uses so it's only ever calculated once per
+// render instead of once per place a balance is displayed.
+export function computeAllRunningBalances(debts, paidByMonth) {
+  const result = {};
+  for (const d of debts) {
+    result[d.id] = computeRunningBalance(d, allPaymentsForBill(paidByMonth, d.id));
+  }
+  return result;
+}
+
 // Simulates forward month by month.
 export function simulatePayoff(debts, recurringExtra, boosts, strategy, opts = {}) {
   const capMonths = opts.capMonths || 480;
@@ -524,10 +599,10 @@ export function buildPaycheckPlan(incomeSources, bills, horizonDays = 95, paidBy
     return priorChecks.length ? priorChecks[priorChecks.length - 1] : null;
   }
 
-  function recordPaidItem(check, billId, name, amount, dueDate, deadline, paymentId, settled, autopay) {
+  function recordPaidItem(check, billId, name, amount, dueDate, deadline, paymentId, settled, autopay, extra) {
     if (!check) return; // paid before any known paycheck — not this plan's to show
     check.remaining -= amount;
-    check.items.push({ billId, name, amount: Math.round(amount * 100) / 100, dueDate, deadline, split: false, paid: true, settled, autopay: !!autopay, paymentId });
+    check.items.push({ billId, name, amount: Math.round(amount * 100) / 100, dueDate, deadline, split: false, paid: true, settled, autopay: !!autopay, extra: !!extra, paymentId });
   }
 
   const handledBillMonths = new Set();
@@ -546,18 +621,18 @@ export function buildPaycheckPlan(incomeSources, bills, horizonDays = 95, paidBy
 
     const monthEntry = paidByMonth[mKey] || {};
     const rec = getPaymentRecord(monthEntry, { id: inst.billId, monthly: inst.amount });
-    // Each individual payment is attributed to whichever paycheck it
-    // actually came from by its own date, capped so payments beyond the
-    // bill's total (an accidental overpay) don't reduce more than one
-    // check's worth of "remaining".
+    // Every payment is attributed to whichever paycheck it actually came
+    // from by its own date and reduces that check's leftover in full —
+    // including anything paid beyond the bill's minimum for this cycle.
+    // Extra money is still money spent; it just gets labeled "extra"
+    // instead of counting toward what's still owed.
     let allocated = 0;
     for (const pmt of rec.payments) {
-      if (allocated >= inst.amount - 0.005) break;
-      const amt = Math.min(Number(pmt.amount) || 0, inst.amount - allocated);
-      if (amt > 0.005) {
-        recordPaidItem(sourceCheckFor(pmt.date), inst.billId, inst.name, amt, inst.dueDate, inst.deadline, pmt.id, isPaymentSettled(pmt));
-        allocated += amt;
-      }
+      const amt = Number(pmt.amount) || 0;
+      if (amt <= 0.005) continue;
+      const isExtra = allocated >= inst.amount - 0.005;
+      recordPaidItem(sourceCheckFor(pmt.date), inst.billId, inst.name, amt, inst.dueDate, inst.deadline, pmt.id, isPaymentSettled(pmt), false, isExtra);
+      allocated += amt;
     }
     const remainingAmount = inst.amount - Math.min(rec.amountPaid, inst.amount);
     if (remainingAmount > 0.005) {

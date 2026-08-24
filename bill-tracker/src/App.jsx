@@ -9,7 +9,7 @@ import {
 
 // Import your extracted logic and components
 import { CATEGORY_OPTIONS, FIXED_CATEGORY_OPTIONS, TIERS, initialDebts, initialFixed, nextId } from "./data/constants";
-import { allocateExtra, allocateMaxCashFlow, buildPaycheckPlan, fastestStrategyForBoost, minimumAdjustedDebts, money, monthLabel, monthLabelFull, pct, simulatePayoff, fmtDate, monthKeyOf, getPaymentRecord, addPaymentRecord, removePaymentRecord, updatePaymentRecord, clearPaymentRecord, isoDate, isPaymentSettled } from "./utils/finance";
+import { allocateExtra, allocateMaxCashFlow, buildPaycheckPlan, fastestStrategyForBoost, minimumAdjustedDebts, money, monthLabel, monthLabelFull, pct, simulatePayoff, fmtDate, monthKeyOf, getPaymentRecord, addPaymentRecord, removePaymentRecord, updatePaymentRecord, clearPaymentRecord, isoDate, isPaymentSettled, computeAllRunningBalances } from "./utils/finance";
 import AddDebtModal from "./components/AddDebtModal";
 import AddFixedModal from "./components/AddFixedModal";
 import AutopaySettingsModal from "./components/AutopaySettingsModal";
@@ -409,7 +409,21 @@ function BillTracker({ saved, userId, userName, initialLastEditedBy }) {
   }, [flushSave]);
 
   // ---- derived numbers ----
-  const debtBills = debts.filter((d) => d.isDebt !== false);
+  // Balances are computed, not the raw stored figure: each account's stored
+  // balance is a fixed anchor (accurate as of BALANCE_ANCHOR_DATE), and
+  // every payment dated after that anchor is split into interest/principal
+  // and rolled forward from there. This is what actually moves the wall,
+  // the stat cards, and the payoff projection as payments come in.
+  const runningBalances = useMemo(() => computeAllRunningBalances(debts, paidByMonth), [debts, paidByMonth]);
+  const debtsWithRunningBalance = useMemo(
+    () => debts.map((d) => {
+      const rb = runningBalances[d.id];
+      return rb && rb.balance !== null && rb.balance !== undefined ? { ...d, balance: rb.balance } : d;
+    }),
+    [debts, runningBalances]
+  );
+
+  const debtBills = debtsWithRunningBalance.filter((d) => d.isDebt !== false);
   const totalDebtMonthly = debtBills.reduce((s, d) => s + Number(d.monthly || 0), 0);
   const totalDebtBalance = debtBills.reduce((s, d) => s + Number(d.balance || 0), 0);
   const rentMonthly = fixed.find((f) => f.type === "Rent/Mortgage")?.monthly || 0;
@@ -425,15 +439,15 @@ function BillTracker({ saved, userId, userName, initialLastEditedBy }) {
   const availableAfterBills = netIncomeNum !== null ? netIncomeNum - totalDebtMonthly - totalFixedMonthly : null;
 
   const sim = useMemo(
-    () => simulatePayoff(debts, Number(recurringExtra) || 0, boosts, strategy, { income, targetDTI: Number(targetDTI) || null, mortgageEstimate: Number(mortgageEstimate) || 0 }),
-    [debts, recurringExtra, boosts, strategy, income, targetDTI, mortgageEstimate]
+    () => simulatePayoff(debtsWithRunningBalance, Number(recurringExtra) || 0, boosts, strategy, { income, targetDTI: Number(targetDTI) || null, mortgageEstimate: Number(mortgageEstimate) || 0 }),
+    [debtsWithRunningBalance, recurringExtra, boosts, strategy, income, targetDTI, mortgageEstimate]
   );
 
   const debtFreeLabel = sim.freedomMonth !== null ? monthLabelFull(sim.freedomMonth) : "480+ months out";
   const fullDebtFreeLabel = sim.fullFreedomMonth !== null ? monthLabelFull(sim.fullFreedomMonth) : "480+ months out";
   const dtiTargetLabel = sim.dtiTargetMonth === 0 ? "Already there" : sim.dtiTargetMonth !== null ? monthLabelFull(sim.dtiTargetMonth) : "480+ months out";
   const dtiWithMortgageTargetLabel = sim.dtiWithMortgageTargetMonth === 0 ? "Already there" : sim.dtiWithMortgageTargetMonth !== null ? monthLabelFull(sim.dtiWithMortgageTargetMonth) : "480+ months out";
-  const hasExcludedWithBalance = debts.some((d) => d.excludeFromGoal && d.isDebt !== false && d.balance > 0);
+  const hasExcludedWithBalance = debtsWithRunningBalance.some((d) => d.excludeFromGoal && d.isDebt !== false && d.balance > 0);
 
   const paycheckPlan = useMemo(() => {
     const billsForPlan = [
@@ -498,12 +512,32 @@ function BillTracker({ saved, userId, userName, initialLastEditedBy }) {
     return wallBaseline;
   }
 
+  // Ledger rows keep editing the raw stored (anchor) balance directly — see
+  // runningBalanceOf below for the computed figure shown alongside it.
   const tierGroups = [1, 2, 3, 4].map((t) => ({
     tier: t,
     items: debts.filter((d) => d.priority === t),
   }));
   const protectedGroup = debts.filter((d) => d.protected);
-  const protectedBalance = protectedGroup.reduce((s, d) => s + Number(d.balance || 0), 0);
+  function runningBalanceOf(d) {
+    const rb = runningBalances[d.id];
+    return rb && rb.balance !== null && rb.balance !== undefined ? rb.balance : Number(d.balance || 0);
+  }
+  // Small hint under the editable (anchor) Balance input showing where the
+  // balance actually stands today, once payments since the anchor date
+  // have moved it — or a warning if underpaying interest is growing it.
+  function renderBalanceHint(d) {
+    const rb = runningBalances[d.id];
+    if (!rb || rb.balance === null || rb.balance === undefined) return null;
+    const diff = Math.abs(rb.balance - Number(d.balance || 0));
+    if (diff < 0.5 && !rb.growing) return null;
+    return (
+      <div className="ctc-hint" style={{ fontSize: 10.5, marginTop: 2, whiteSpace: "nowrap", color: rb.growing ? "var(--brick)" : "var(--pine-deep)" }}>
+        {rb.growing ? "growing — " : "now "}{money(rb.balance)}{rb.isEstimate ? " (est.)" : ""}
+      </div>
+    );
+  }
+  const protectedBalance = protectedGroup.reduce((s, d) => s + runningBalanceOf(d), 0);
 
   function updateDebt(id, patch) {
     setDebts((prev) => prev.map((d) => (d.id === id ? { ...d, ...patch } : d)));
@@ -892,7 +926,7 @@ function BillTracker({ saved, userId, userName, initialLastEditedBy }) {
           </div>
           <div className="wall-track">
             {tierGroups.map(({ tier, items }) => {
-              const balance = items.reduce((s, d) => s + Number(d.balance || 0), 0);
+              const balance = items.reduce((s, d) => s + runningBalanceOf(d), 0);
               const baseline = startingTotalRef(debts);
               const w = baseline > 0 ? (balance / baseline) * 100 : 0;
               return <div key={tier} className="wall-seg" style={{ width: `${w}%`, background: TIERS[tier].color }} title={`${TIERS[tier].label}: ${money(balance)}`} />;
@@ -1335,6 +1369,7 @@ function BillTracker({ saved, userId, userName, initialLastEditedBy }) {
                               {it.settled && <CheckCircle2 size={12} color="var(--pine-deep)" style={{ marginRight: 4, verticalAlign: -1 }} />}
                               {it.paid && !it.settled && <Clock size={12} color="var(--brass-deep)" style={{ marginRight: 4, verticalAlign: -1 }} />}
                               {it.name}{it.split ? <span className="split-badge">{it.splitLabel}</span> : null}
+                              {it.extra && <span className="split-badge" title="Beyond this bill's minimum for the cycle">Extra</span>}
                               {it.autopay && <span className="split-badge" title="Autopay">Autopay</span>}
                             </span>
                             <span className="ctc-mono" style={{ textDecoration: it.settled ? "line-through" : "none" }}>{money(it.amount)}</span>
@@ -1375,7 +1410,7 @@ function BillTracker({ saved, userId, userName, initialLastEditedBy }) {
 
           {tierGroups.map(({ tier, items }) => {
             const collapsed = collapsedTiers[tier];
-            const balSum = items.reduce((s, d) => s + Number(d.balance || 0), 0);
+            const balSum = items.reduce((s, d) => s + runningBalanceOf(d), 0);
             const monSum = items.reduce((s, d) => s + Number(d.monthly || 0), 0);
             if (items.length === 0) return null;
             return (
@@ -1413,7 +1448,7 @@ function BillTracker({ saved, userId, userName, initialLastEditedBy }) {
                             </select>
                           </td>
                           <td><input type="number" value={d.monthly} onChange={(e) => updateDebt(d.id, { monthly: Number(e.target.value) })} /></td>
-                          <td><input type="number" value={d.balance ?? ""} onChange={(e) => updateDebt(d.id, { balance: Number(e.target.value) })} /></td>
+                          <td><input type="number" value={d.balance ?? ""} onChange={(e) => updateDebt(d.id, { balance: Number(e.target.value) })} />{renderBalanceHint(d)}</td>
                           <td><input type="number" placeholder="—" value={d.apr ?? ""} onChange={(e) => updateDebt(d.id, { apr: e.target.value === "" ? null : Number(e.target.value) })} /></td>
                           <td><input type="number" min="1" max="31" placeholder="—" value={d.dueDay ?? ""} onChange={(e) => updateDebt(d.id, { dueDay: e.target.value === "" ? null : Number(e.target.value) })} /></td>
                           <td><input type="number" min="0" placeholder="0" value={d.graceDays ?? 0} onChange={(e) => updateDebt(d.id, { graceDays: e.target.value === "" ? 0 : Number(e.target.value) })} /></td>
@@ -1473,7 +1508,7 @@ function BillTracker({ saved, userId, userName, initialLastEditedBy }) {
                             </select>
                           </td>
                           <td><input type="number" value={d.monthly} onChange={(e) => updateDebt(d.id, { monthly: Number(e.target.value) })} /></td>
-                          <td><input type="number" placeholder="unknown" value={d.balance ?? ""} onChange={(e) => updateDebt(d.id, { balance: e.target.value === "" ? null : Number(e.target.value) })} /></td>
+                          <td><input type="number" placeholder="unknown" value={d.balance ?? ""} onChange={(e) => updateDebt(d.id, { balance: e.target.value === "" ? null : Number(e.target.value) })} />{renderBalanceHint(d)}</td>
                           <td><input type="number" min="1" max="31" placeholder="—" value={d.dueDay ?? ""} onChange={(e) => updateDebt(d.id, { dueDay: e.target.value === "" ? null : Number(e.target.value) })} /></td>
                           <td><input type="number" min="0" placeholder="0" value={d.graceDays ?? 0} onChange={(e) => updateDebt(d.id, { graceDays: e.target.value === "" ? 0 : Number(e.target.value) })} /></td>
                           <td style={{ textAlign: "center" }}>
@@ -1793,8 +1828,10 @@ function BillPaymentCard({ item, rec, onToggleFull, onAddPayment, onRemovePaymen
           {pendingAmount > 0.005 && <div className="ctc-hint" style={{ color: "var(--brass-deep)" }}>Scheduled — {money(pendingAmount)} not yet settled</div>}
         </div>
         <div style={{ textAlign: "right" }}>
-          <div className="ctc-mono" style={{ fontWeight: 600 }}>{money(rec.amountPaid)}</div>
-          <div className="ctc-hint" style={{ marginTop: 2 }}>of {money(monthly)}</div>
+          <div className="ctc-mono" style={{ fontWeight: 600 }}>{money(Math.min(rec.amountPaid, monthly))} <span style={{ fontWeight: 400, color: "var(--ink-soft)" }}>of {money(monthly)}</span></div>
+          {rec.amountPaid > monthly + 0.005 && (
+            <div className="ctc-hint" style={{ marginTop: 2, color: "var(--pine-deep)", fontWeight: 600 }}>+{money(rec.amountPaid - monthly)} extra</div>
+          )}
         </div>
       </div>
 
