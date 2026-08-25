@@ -12,10 +12,11 @@
 
 body {
   margin: 0;
-}
-
-html, body {
-  overflow-x: hidden;
+  /* clip (not hidden) so body doesn't become its own scroll container —
+     setting overflow on both html and body broke vertical scrolling on
+     Android Chrome, since the browser could no longer tell which of the
+     two owned the page's real scroll. */
+  overflow-x: clip;
   overscroll-behavior-y: contain;
 }
 
