@@ -82,6 +82,7 @@ export function describeChanges(prev, next) {
   ]);
 
   diffCollection(prev.debts, next.debts, "debt", changes);
+  diffCollection(prev.paidOffDebts, next.paidOffDebts, "paid-off debt", changes);
   diffCollection(prev.fixed, next.fixed, "expense", changes);
   diffCollection(prev.incomeSources, next.incomeSources, "paycheck source", changes);
   diffPaidByMonth(prev.paidByMonth, next.paidByMonth, billNames, changes);

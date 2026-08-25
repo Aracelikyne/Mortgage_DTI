@@ -10,7 +10,7 @@ import {
 
 // Import your extracted logic and components
 import { CATEGORY_OPTIONS, FIXED_CATEGORY_OPTIONS, TIERS, PRIORITY_OPTIONS, initialDebts, initialFixed, nextId } from "./data/constants";
-import { allocateExtra, allocateMaxCashFlow, buildPaycheckPlan, fastestStrategyForBoost, minimumAdjustedDebts, money, monthLabel, monthLabelFull, pct, simulatePayoff, fmtDate, monthKeyOf, getPaymentRecord, addPaymentRecord, removePaymentRecord, updatePaymentRecord, clearPaymentRecord, isoDate, isPaymentSettled, computeAllRunningBalances } from "./utils/finance";
+import { allocateExtra, allocateMaxCashFlow, buildPaycheckPlan, fastestStrategyForBoost, minimumAdjustedDebts, money, monthLabel, monthLabelFull, pct, simulatePayoff, fmtDate, monthKeyOf, getPaymentRecord, addPaymentRecord, removePaymentRecord, updatePaymentRecord, clearPaymentRecord, isoDate, isPaymentSettled, computeAllRunningBalances, isUnderwater } from "./utils/finance";
 import AddDebtModal from "./components/AddDebtModal";
 import AddFixedModal from "./components/AddFixedModal";
 import AutopaySettingsModal from "./components/AutopaySettingsModal";
@@ -250,6 +250,7 @@ function AuthScreen({ loading }) {
 
 function BillTracker({ saved, userId, userName, initialLastEditedBy }) {
   const [debts, setDebts] = useState(saved.debts || initialDebts);
+  const [paidOffDebts, setPaidOffDebts] = useState(saved.paidOffDebts || []);
   const [fixed, setFixed] = useState(saved.fixed || initialFixed);
   const [income, setIncome] = useState(saved.income ?? 15000);
   const [netIncome, setNetIncome] = useState(saved.netIncome ?? "");
@@ -336,6 +337,7 @@ function BillTracker({ saved, userId, userName, initialLastEditedBy }) {
   // pending, instead of making every load go through a full page refresh.
   const applyLoadedState = useCallback((data) => {
     setDebts(data.debts || initialDebts);
+    setPaidOffDebts(data.paidOffDebts || []);
     setFixed(data.fixed || initialFixed);
     setIncome(data.income ?? 15000);
     setNetIncome(data.netIncome ?? "");
@@ -386,7 +388,7 @@ function BillTracker({ saved, userId, userName, initialLastEditedBy }) {
   const isFirstRender = useRef(true);
   const latestState = useRef(null);
   useEffect(() => {
-    latestState.current = { debts, fixed, income, netIncome, includeRent, recurringExtra, strategy, targetDTI, mortgageEstimate, incomeSources, boosts, paycheckReserve, paidByMonth, debtBaseline, paycheckOverrides };
+    latestState.current = { debts, paidOffDebts, fixed, income, netIncome, includeRent, recurringExtra, strategy, targetDTI, mortgageEstimate, incomeSources, boosts, paycheckReserve, paidByMonth, debtBaseline, paycheckOverrides };
   });
 
   const flushSave = useCallback(() => {
@@ -440,7 +442,7 @@ function BillTracker({ saved, userId, userName, initialLastEditedBy }) {
     if (saveTimer.current) clearTimeout(saveTimer.current);
     saveTimer.current = setTimeout(flushSave, 700);
     return () => clearTimeout(saveTimer.current);
-  }, [debts, fixed, income, netIncome, includeRent, recurringExtra, strategy, targetDTI, mortgageEstimate, incomeSources, boosts, paycheckReserve, paidByMonth, debtBaseline, paycheckOverrides, flushSave]);
+  }, [debts, paidOffDebts, fixed, income, netIncome, includeRent, recurringExtra, strategy, targetDTI, mortgageEstimate, incomeSources, boosts, paycheckReserve, paidByMonth, debtBaseline, paycheckOverrides, flushSave]);
 
   // Since this data is now shared between two people, the other person can
   // save changes while this tab is open. If nothing here is mid-edit
@@ -624,21 +626,49 @@ function BillTracker({ saved, userId, userName, initialLastEditedBy }) {
   function renderBalanceHint(d) {
     const rb = runningBalances[d.id];
     if (!rb || rb.balance === null || rb.balance === undefined) return null;
+    // rb.growing looks backward (did past payments outpace interest?); a
+    // protected/forever debt also needs a forward-looking check, since its
+    // minimum never gets extra help — so raising or lowering that minimum
+    // should flip this note immediately, not just once new payments land.
+    const growing = rb.growing || (d.protected && isUnderwater({ ...d, balance: rb.balance }));
     const diff = Math.abs(rb.balance - Number(d.balance || 0));
-    if (diff < 0.5 && !rb.growing) return null;
+    if (diff < 0.5 && !growing) return null;
     return (
-      <div className="ctc-hint" style={{ fontSize: 10.5, marginTop: 2, whiteSpace: "nowrap", color: rb.growing ? "var(--brick)" : "var(--pine-deep)" }}>
-        {rb.growing ? "growing — " : "now "}{money(rb.balance)}{rb.isEstimate ? " (est.)" : ""}
+      <div className="ctc-hint" style={{ fontSize: 10.5, marginTop: 2, whiteSpace: "nowrap", color: growing ? "var(--brick)" : "var(--pine-deep)" }}>
+        {growing ? "growing — " : "now "}{money(rb.balance)}{rb.isEstimate ? " (est.)" : ""}
       </div>
     );
   }
   const protectedBalance = protectedGroup.reduce((s, d) => s + runningBalanceOf(d), 0);
+  const paidOffTotal = paidOffDebts.reduce((s, d) => s + Number(d.balanceAtPayoff || 0), 0);
 
   function updateDebt(id, patch) {
     setDebts((prev) => prev.map((d) => (d.id === id ? { ...d, ...patch } : d)));
   }
+  // Deleting a debt never erases it outright — it moves to the Paid Off
+  // archive below, preserving what it was worth so "paid off so far" keeps
+  // a real running total instead of the debt just vanishing. Restore below
+  // undoes the archive if it was deleted by mistake.
   function removeDebt(id) {
-    setDebts((prev) => prev.filter((d) => d.id !== id));
+    const d = debts.find((x) => x.id === id);
+    if (d) {
+      const rb = runningBalances[id];
+      const balanceAtPayoff = rb && rb.balance !== null && rb.balance !== undefined ? rb.balance : Number(d.balance || 0);
+      setPaidOffDebts((prev) => [...prev, { ...d, balanceAtPayoff, payoffDate: isoDate(new Date()) }]);
+    }
+    setDebts((prev) => prev.filter((x) => x.id !== id));
+  }
+  function restoreDebt(id) {
+    const d = paidOffDebts.find((x) => x.id === id);
+    if (!d) return;
+    const restored = { ...d };
+    delete restored.balanceAtPayoff;
+    delete restored.payoffDate;
+    setDebts((prev) => [...prev, restored]);
+    setPaidOffDebts((prev) => prev.filter((x) => x.id !== id));
+  }
+  function deleteArchivedDebt(id) {
+    setPaidOffDebts((prev) => prev.filter((x) => x.id !== id));
   }
   function addDebt(newDebt) {
     setDebts((prev) => [...prev, { id: nextId(), excludeFromGoal: false, protected: false, apr: null, dueDay: null, ...newDebt }]);
@@ -1625,7 +1655,7 @@ function BillTracker({ saved, userId, userName, initialLastEditedBy }) {
                               <Zap size={14} color={d.autopay ? "var(--brass-deep)" : "var(--ink-soft)"} fill={d.autopay ? "var(--brass-deep)" : "none"} />
                             </button>
                           </td>
-                          <td><button className="btn-ghost btn-sm" style={{ border: "none" }} onClick={() => removeDebt(d.id)}><Trash2 size={14} color="#A5473A" /></button></td>
+                          <td><button className="btn-ghost btn-sm" style={{ border: "none" }} title="Mark paid off — moves to the Paid Off list below, it doesn't erase it" onClick={() => removeDebt(d.id)}><Trash2 size={14} color="#A5473A" /></button></td>
                         </tr>
                       ))}
                     </tbody>
@@ -1704,6 +1734,53 @@ function BillTracker({ saved, userId, userName, initialLastEditedBy }) {
                   </table>
                   </div>
                   <div className="protected-note">These count toward your DTI and never get extra payments. Tick "Goal" if you want one counted toward your debt-free date — it needs a balance to be projectable. "Total debt-free" above only counts ones with a balance entered.</div>
+                </>
+              )}
+            </div>
+          )}
+
+          {paidOffDebts.length > 0 && (
+            <div className="card" style={{ marginTop: 12 }}>
+              <div className="tier-head" onClick={() => setCollapsedTiers((p) => ({ ...p, paidOff: !p.paidOff }))}>
+                <CheckCircle2 size={14} color="var(--pine-deep)" />
+                Paid off
+                {collapsedTiers.paidOff ? <ChevronDown size={16} /> : <ChevronUp size={16} />}
+                <span className="tier-sum">{money(paidOffTotal)} so far · {paidOffDebts.length} debt{paidOffDebts.length === 1 ? "" : "s"}</span>
+              </div>
+              {!collapsedTiers.paidOff && (
+                <>
+                <div className="ledger-scroll">
+                <table className="ledger">
+                  <thead>
+                    <tr>
+                      <th>Name</th>
+                      <th>Type</th>
+                      <th>Amount paid off</th>
+                      <th>Date</th>
+                      <th></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {paidOffDebts.map((d) => (
+                      <tr key={d.id}>
+                        <td>{d.name}</td>
+                        <td>{d.type}</td>
+                        <td>{money(d.balanceAtPayoff)}</td>
+                        <td>{d.payoffDate ? fmtDate(new Date(d.payoffDate + "T00:00:00")) : "—"}</td>
+                        <td style={{ whiteSpace: "nowrap" }}>
+                          <button className="btn-ghost btn-sm" style={{ border: "none" }} title="Restore to active debts" onClick={() => restoreDebt(d.id)}>
+                            <Clock size={14} color="var(--pine-deep)" />
+                          </button>
+                          <button className="btn-ghost btn-sm" style={{ border: "none" }} title="Delete permanently — can't be undone" onClick={() => deleteArchivedDebt(d.id)}>
+                            <Trash2 size={14} color="#A5473A" />
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                </div>
+                <div className="protected-note">Deleting a debt above moves it here instead of erasing it, so this is a running record of what's been paid off. Restore brings one back to the active list; the trash icon here removes it for good.</div>
                 </>
               )}
             </div>

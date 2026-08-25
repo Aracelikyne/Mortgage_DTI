@@ -190,7 +190,7 @@ export function computeAllRunningBalances(debts, paidByMonth) {
 // Real minimums usually scale with balance (e.g. "2% or $25, whichever is
 // greater"); this app's minimum is a fixed number that never adjusts, so
 // nothing here would ever catch up on its own.
-function isUnderwater(d) {
+export function isUnderwater(d) {
   const apr = Number(d.apr) || 0;
   if (apr <= 0) return false;
   return Number(d.monthly || 0) < monthlyInterest(Number(d.balance || 0), apr);
