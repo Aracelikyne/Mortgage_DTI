@@ -814,6 +814,21 @@ function BillTracker({ saved, userId, userName, initialLastEditedBy }) {
           .sidebar-link { width: auto; }
         }
 
+        @media (max-width: 640px) {
+          .ctc-main { padding: 18px 12px 40px; }
+          .card { padding: 14px; }
+          .wall-wrap { padding: 14px 14px; }
+          .modal-overlay { padding: 10px; }
+          .modal { padding: 16px; }
+          /* iOS Safari zooms the page in on focus if a field's font-size is
+             under 16px — everything below is normally smaller for density,
+             so bump it back up just on touch-sized screens. */
+          .field input, .field select, table.ledger input, table.ledger select,
+          input[type="number"], input[type="text"], input[type="date"], textarea {
+            font-size: 16px;
+          }
+        }
+
         .ctc-eyebrow {
           font-family: 'IBM Plex Mono', monospace;
           text-transform: uppercase;
@@ -865,6 +880,7 @@ function BillTracker({ saved, userId, userName, initialLastEditedBy }) {
 
         .stat-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-top: 16px; }
         @media (max-width: 760px) { .stat-grid { grid-template-columns: repeat(2, 1fr); } }
+        @media (max-width: 480px) { .stat-grid { grid-template-columns: 1fr; } }
         .stat-card { background: var(--card); border: 1px solid var(--line); border-radius: 4px; padding: 14px 16px; }
         .stat-label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--ink-soft); font-weight: 600; }
         .stat-value { font-family: 'IBM Plex Mono', monospace; font-size: 22px; font-weight: 600; margin-top: 4px; }
@@ -873,7 +889,7 @@ function BillTracker({ saved, userId, userName, initialLastEditedBy }) {
         .stat-value.brass { color: var(--brass-deep); }
 
         .ctc-section { margin-top: 34px; }
-        .ctc-section-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; margin-bottom: 12px; }
+        .ctc-section-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; margin-bottom: 12px; flex-wrap: wrap; }
         .ctc-h2 { font-family: 'Fraunces', serif; font-size: 21px; font-weight: 600; display:flex; align-items:center; gap:8px;}
         .ctc-hint { font-size: 12.5px; color: var(--ink-soft); }
 
@@ -2012,7 +2028,7 @@ function MonthlyPlan({ debtBills, fixed, paidByMonth, setPaidByMonth }) {
     <div style={{ marginTop: 4 }}>
       <div className="ctc-section-head" style={{ marginTop: 18 }}>
         <div className="ctc-h2"><Calendar size={18} /> Monthly plan</div>
-        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
           <button className="btn-ghost btn-sm" style={{ border: "1px solid var(--line)" }} onClick={() => shiftMonth(-1)}><ChevronLeft size={15} /></button>
           <span className="ctc-mono" style={{ minWidth: 130, textAlign: "center", fontWeight: 600 }}>{monthLabelText}</span>
           <button className="btn-ghost btn-sm" style={{ border: "1px solid var(--line)" }} onClick={() => shiftMonth(1)}><ChevronRight size={15} /></button>
@@ -2123,7 +2139,7 @@ function BillPaymentCard({ item, rec, onToggleFull, onAddPayment, onRemovePaymen
         </div>
       )}
 
-      <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 10, paddingTop: 10, borderTop: "1px dashed var(--line)" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap", marginTop: 10, paddingTop: 10, borderTop: "1px dashed var(--line)" }}>
         <input
           type="number"
           placeholder="Amount"

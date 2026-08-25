@@ -89,7 +89,7 @@ export default function NotesPanel({ userId, userName }) {
 
       <div
         style={{
-          position: "fixed", top: 0, right: 0, bottom: 0, width: 320,
+          position: "fixed", top: 0, right: 0, bottom: 0, width: "min(320px, 100vw)",
           background: "var(--paper)", borderLeft: "1px solid var(--line)",
           boxShadow: open ? "-4px 0 16px rgba(0,0,0,0.12)" : "none",
           transform: open ? "translateX(0)" : "translateX(100%)",
