@@ -5,7 +5,7 @@ import {
 import {
   Home, KeyRound, Lock, Plus, Trash2, ChevronDown, ChevronUp, ChevronLeft, ChevronRight,
   Wallet, TrendingDown, Sparkles, PiggyBank, Calendar, LogOut, CheckCircle2, Circle, Pencil, Clock, Zap, FlaskConical,
-  LayoutDashboard, Receipt, ListChecks, Activity, GripVertical, ShoppingCart
+  LayoutDashboard, Receipt, ListChecks, Activity, GripVertical, ShoppingCart, ArrowUpDown
 } from "lucide-react";
 
 // Import your extracted logic and components
@@ -18,6 +18,7 @@ import PresenceBar from "./components/PresenceBar";
 import CursorOverlay from "./components/CursorOverlay";
 import NotesPanel from "./components/NotesPanel";
 import NotificationSettings from "./components/NotificationSettings";
+import TabOrderModal from "./components/TabOrderModal";
 import ExpenseTracker from "./components/ExpenseTracker";
 import { describeChanges } from "./utils/activity";
 import { useLiveFollow } from "./hooks/useLiveFollow";
@@ -287,6 +288,28 @@ function BillTracker({ saved, userId, userName, initialLastEditedBy }) {
   useEffect(() => {
     try { localStorage.setItem("ctc-sidebar-collapsed", sidebarCollapsed ? "1" : "0"); } catch { /* best effort */ }
   }, [sidebarCollapsed]);
+  // Also per-device — which tabs matter most shifts over time and doesn't
+  // need to match between two people sharing the same data.
+  const [navOrder, setNavOrder] = useState(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem("ctc-nav-order") || "null");
+      if (Array.isArray(saved)) return saved;
+    } catch { /* ignore */ }
+    return NAV_ITEMS.map((n) => n.key);
+  });
+  useEffect(() => {
+    try { localStorage.setItem("ctc-nav-order", JSON.stringify(navOrder)); } catch { /* best effort */ }
+  }, [navOrder]);
+  // A saved order can predate a tab being added/removed from NAV_ITEMS —
+  // known keys keep their saved order, anything new lands at the end
+  // instead of vanishing from the nav entirely.
+  const orderedNavItems = useMemo(() => {
+    const byKey = new Map(NAV_ITEMS.map((n) => [n.key, n]));
+    const known = navOrder.map((k) => byKey.get(k)).filter(Boolean);
+    const missing = NAV_ITEMS.filter((n) => !navOrder.includes(n.key));
+    return [...known, ...missing];
+  }, [navOrder]);
+  const [showTabOrder, setShowTabOrder] = useState(false);
   const [editingPaycheckId, setEditingPaycheckId] = useState(null);
   const debtsCols = useColumnWidths("ctc-col-widths-debts", {
     name: 200, type: 120, category: 150, monthly: 90, balance: 130, apr: 90,
@@ -1037,7 +1060,7 @@ function BillTracker({ saved, userId, userName, initialLastEditedBy }) {
         <div className="ctc-eyebrow">Debt payoff & DTI tracker</div>
         <h1 className="ctc-title" style={{ fontSize: 24 }}>Clear to Close</h1>
         <div className="sidebar-nav">
-          {NAV_ITEMS.map((item) => {
+          {orderedNavItems.map((item) => {
             const Icon = item.icon;
             return (
               <button
@@ -1051,11 +1074,28 @@ function BillTracker({ saved, userId, userName, initialLastEditedBy }) {
               </button>
             );
           })}
+          <button
+            className="sidebar-link"
+            style={{ color: "var(--ink-soft)", fontWeight: 500 }}
+            onClick={() => setShowTabOrder(true)}
+            title={sidebarCollapsed ? "Reorder tabs" : undefined}
+          >
+            <ArrowUpDown size={16} style={{ flexShrink: 0 }} />
+            <span className="sidebar-link-label">Reorder tabs</span>
+          </button>
         </div>
       </nav>
 
+      {showTabOrder && (
+        <TabOrderModal
+          items={orderedNavItems}
+          onClose={() => setShowTabOrder(false)}
+          onSave={(keys) => { setNavOrder(keys); setShowTabOrder(false); }}
+        />
+      )}
+
       <div className="bottom-tabbar">
-        {NAV_ITEMS.map((item) => {
+        {orderedNavItems.map((item) => {
           const Icon = item.icon;
           return (
             <button
