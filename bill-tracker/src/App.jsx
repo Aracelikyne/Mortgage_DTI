@@ -4,7 +4,8 @@ import {
 } from "recharts";
 import {
   Home, KeyRound, Lock, Plus, Trash2, ChevronDown, ChevronUp, ChevronLeft, ChevronRight,
-  Wallet, TrendingDown, Sparkles, PiggyBank, Calendar, LogOut, CheckCircle2, Circle, Pencil, Clock, Zap, FlaskConical
+  Wallet, TrendingDown, Sparkles, PiggyBank, Calendar, LogOut, CheckCircle2, Circle, Pencil, Clock, Zap, FlaskConical,
+  LayoutDashboard, Receipt, ListChecks, Activity, GripVertical
 } from "lucide-react";
 
 // Import your extracted logic and components
@@ -20,15 +21,70 @@ import { describeChanges } from "./utils/activity";
 import { useLiveFollow } from "./hooks/useLiveFollow";
 import { supabase } from "./lib/supabaseClient";
 
+// Excel-style column resizing for a ledger table. Widths are pixel-based
+// (not %) and persisted per-device in localStorage, keyed by table so the
+// three ledger tables each remember their own layout independently.
+function useColumnWidths(storageKey, defaultWidths) {
+  const [widths, setWidths] = useState(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem(storageKey) || "null");
+      return saved && typeof saved === "object" ? { ...defaultWidths, ...saved } : defaultWidths;
+    } catch {
+      return defaultWidths;
+    }
+  });
+  useEffect(() => {
+    try { localStorage.setItem(storageKey, JSON.stringify(widths)); } catch { /* best effort */ }
+  }, [widths, storageKey]);
+
+  function startResize(colKey, downEvent) {
+    downEvent.preventDefault();
+    const startX = downEvent.clientX;
+    const startWidth = widths[colKey];
+    function onMove(e) {
+      const next = Math.max(40, startWidth + (e.clientX - startX));
+      setWidths((w) => ({ ...w, [colKey]: next }));
+    }
+    function onUp() {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+    }
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+  }
+
+  return { widths, startResize };
+}
+
+// A <th> with a draggable right-edge handle. Needs the table's own
+// startResize/colKey; renders as a normal header cell otherwise.
+function ResizableTh({ width, colKey, startResize, children, ...rest }) {
+  return (
+    <th style={{ width, position: "relative" }} {...rest}>
+      {children}
+      <span
+        onPointerDown={(e) => startResize(colKey, e)}
+        title="Drag to resize"
+        style={{
+          position: "absolute", right: -4, top: 0, bottom: 0, width: 9, cursor: "col-resize",
+          zIndex: 2, touchAction: "none", display: "flex", alignItems: "center", justifyContent: "center",
+        }}
+      >
+        <GripVertical size={10} style={{ opacity: 0.35 }} />
+      </span>
+    </th>
+  );
+}
+
 const NAV_ITEMS = [
-  { key: "dashboard", label: "Dashboard" },
-  { key: "budget", label: "Income & Budget" },
-  { key: "timeline", label: "Payoff Timeline" },
-  { key: "paycheck", label: "Paycheck Plan" },
-  { key: "debts", label: "Debts" },
-  { key: "fixed", label: "Fixed Expenses" },
-  { key: "monthly", label: "Monthly Plan" },
-  { key: "activity", label: "Activity" },
+  { key: "dashboard", label: "Dashboard", icon: LayoutDashboard },
+  { key: "budget", label: "Income & Budget", icon: Wallet },
+  { key: "timeline", label: "Payoff Timeline", icon: TrendingDown },
+  { key: "paycheck", label: "Paycheck Plan", icon: Calendar },
+  { key: "debts", label: "Debts", icon: PiggyBank },
+  { key: "fixed", label: "Fixed Expenses", icon: Receipt },
+  { key: "monthly", label: "Monthly Plan", icon: ListChecks },
+  { key: "activity", label: "Activity", icon: Activity },
 ];
 
 // One-time migration from the old localStorage-only version of the app.
@@ -219,7 +275,22 @@ function BillTracker({ saved, userId, userName, initialLastEditedBy }) {
   const [showAddFixed, setShowAddFixed] = useState(false);
   const [editingAutopay, setEditingAutopay] = useState(null); // { kind: "debt" | "fixed", item }
   const [collapsedTiers, setCollapsedTiers] = useState({});
+  // Per-device UI preference, not shared household data — deliberately kept
+  // out of paidByMonth/etc. and Supabase entirely.
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
+    try { return localStorage.getItem("ctc-sidebar-collapsed") === "1"; } catch { return false; }
+  });
+  useEffect(() => {
+    try { localStorage.setItem("ctc-sidebar-collapsed", sidebarCollapsed ? "1" : "0"); } catch { /* best effort */ }
+  }, [sidebarCollapsed]);
   const [editingPaycheckId, setEditingPaycheckId] = useState(null);
+  const debtsCols = useColumnWidths("ctc-col-widths-debts", {
+    name: 200, type: 120, category: 150, monthly: 90, balance: 130, apr: 90,
+    dueDay: 70, grace: 60, goal: 60, splitOk: 70, autopay: 34, del: 34,
+  });
+  const fixedCols = useColumnWidths("ctc-col-widths-fixed", {
+    name: 220, type: 130, monthly: 100, dueDay: 70, grace: 60, splitOk: 70, note: 260, autopay: 34, del: 34,
+  });
   const [saveStatus, setSaveStatus] = useState("idle"); // idle | saving | saved | error
   const saveTimer = useRef(null);
   const [lastEditedBy, setLastEditedBy] = useState(initialLastEditedBy || { name: null, at: null });
@@ -681,22 +752,34 @@ function BillTracker({ saved, userId, userName, initialLastEditedBy }) {
         .ctc-sidebar {
           width: 232px; flex-shrink: 0; padding: 26px 16px; position: sticky; top: 0;
           align-self: flex-start; max-height: 100vh; overflow-y: auto; border-right: 1px solid var(--line);
+          transition: width 0.15s ease, padding 0.15s ease;
         }
+        .ctc-sidebar.collapsed { width: 56px; padding: 26px 8px; overflow-x: hidden; }
+        .ctc-sidebar.collapsed .ctc-eyebrow, .ctc-sidebar.collapsed .ctc-title, .ctc-sidebar.collapsed .sidebar-link-label { display: none; }
+        .sidebar-toggle {
+          border: none; background: transparent; cursor: pointer; color: var(--ink-soft); padding: 6px;
+          border-radius: 4px; display: flex; align-items: center; justify-content: center; margin-bottom: 10px;
+        }
+        .sidebar-toggle:hover { background: rgba(0,0,0,0.05); }
         .ctc-main { flex: 1; min-width: 0; padding: 28px 20px 60px; }
         .sidebar-nav { margin-top: 22px; display: flex; flex-direction: column; gap: 2px; }
+        .ctc-sidebar.collapsed .sidebar-nav { margin-top: 0; }
         .sidebar-link {
-          display: flex; align-items: center; width: 100%; text-align: left; padding: 9px 12px;
+          display: flex; align-items: center; gap: 10px; width: 100%; text-align: left; padding: 9px 12px;
           border-radius: 4px; font-size: 13.5px; font-weight: 600; color: var(--ink-soft);
-          background: transparent; border: none; cursor: pointer; font-family: 'Inter', sans-serif;
+          background: transparent; border: none; cursor: pointer; font-family: 'Inter', sans-serif; white-space: nowrap;
         }
         .sidebar-link:hover { background: rgba(0,0,0,0.05); }
         .sidebar-link.active { background: var(--ink); color: var(--paper); }
         @media (max-width: 860px) {
           .ctc-app { flex-direction: column; }
-          .ctc-sidebar {
+          .ctc-sidebar, .ctc-sidebar.collapsed {
             width: 100%; position: static; max-height: none; border-right: none;
             border-bottom: 1px solid var(--line); padding: 16px 20px;
           }
+          .ctc-sidebar.collapsed .ctc-eyebrow, .ctc-sidebar.collapsed .ctc-title, .ctc-sidebar.collapsed .sidebar-link-label { display: block; }
+          .ctc-sidebar.collapsed .sidebar-link-label { display: inline; }
+          .sidebar-toggle { display: none; }
           .sidebar-nav { margin-top: 12px; flex-direction: row; flex-wrap: wrap; }
           .sidebar-link { width: auto; }
         }
@@ -810,7 +893,8 @@ function BillTracker({ saved, userId, userName, initialLastEditedBy }) {
         .sugg-row { display: flex; justify-content: space-between; font-size: 13.5px; padding: 6px 0; border-bottom: 1px solid #EFE9D9; }
         .sugg-row:last-child { border-bottom: none; }
 
-        table.ledger { width: 100%; table-layout: fixed; border-collapse: collapse; font-size: 13px; }
+        table.ledger { width: max-content; min-width: 100%; table-layout: fixed; border-collapse: collapse; font-size: 13px; }
+        .ledger-scroll { overflow-x: auto; }
         table.ledger th {
           text-align: left; font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.05em;
           color: var(--ink-soft); font-weight: 600; padding: 6px 8px; border-bottom: 1px solid var(--line);
@@ -871,19 +955,31 @@ function BillTracker({ saved, userId, userName, initialLastEditedBy }) {
         .footnote { font-size: 12px; color: var(--ink-soft); margin-top: 30px; border-top: 1px solid var(--line); padding-top: 14px; line-height: 1.6; }
       `}</style>
 
-      <nav className="ctc-sidebar">
+      <nav className={`ctc-sidebar ${sidebarCollapsed ? "collapsed" : ""}`}>
+        <button
+          className="sidebar-toggle"
+          onClick={() => setSidebarCollapsed((c) => !c)}
+          title={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+        >
+          {sidebarCollapsed ? <ChevronRight size={16} /> : <ChevronLeft size={16} />}
+        </button>
         <div className="ctc-eyebrow">Debt payoff & DTI tracker</div>
         <h1 className="ctc-title" style={{ fontSize: 24 }}>Clear to Close</h1>
         <div className="sidebar-nav">
-          {NAV_ITEMS.map((item) => (
-            <button
-              key={item.key}
-              className={`sidebar-link ${page === item.key ? "active" : ""}`}
-              onClick={() => setPage(item.key)}
-            >
-              {item.label}
-            </button>
-          ))}
+          {NAV_ITEMS.map((item) => {
+            const Icon = item.icon;
+            return (
+              <button
+                key={item.key}
+                className={`sidebar-link ${page === item.key ? "active" : ""}`}
+                onClick={() => setPage(item.key)}
+                title={sidebarCollapsed ? item.label : undefined}
+              >
+                <Icon size={16} style={{ flexShrink: 0 }} />
+                <span className="sidebar-link-label">{item.label}</span>
+              </button>
+            );
+          })}
         </div>
       </nav>
 
@@ -1253,6 +1349,14 @@ function BillTracker({ saved, userId, userName, initialLastEditedBy }) {
             <div className="ctc-h2"><TrendingDown size={18} /> Payoff timeline</div>
             <button className="btn btn-ghost btn-sm" onClick={() => setBoosts((b) => [...b, { id: nextId(), month: 3, amount: 1000 }])}><Plus size={13} /> Add one-time boost</button>
           </div>
+          {sim.underwaterDebts && sim.underwaterDebts.length > 0 && (
+            <div className="warning-box" style={{ marginBottom: 14 }}>
+              <strong>Heads up:</strong> {sim.underwaterDebts.join(", ")} {sim.underwaterDebts.length > 1 ? "have" : "has"} a minimum
+              payment that doesn't cover its own interest. Since forever loans never get extra payments, at current terms{" "}
+              {sim.underwaterDebts.length > 1 ? "these will" : "this will"} never pay down — its balance is held flat in this
+              projection rather than shown compounding forever. Raise the minimum, or double-check the APR, on the Debts tab.
+            </div>
+          )}
           <div className="card">
             {boosts.length > 0 && (
               <div style={{ marginBottom: 16, display: "flex", flexDirection: "column", gap: 8 }}>
@@ -1470,21 +1574,25 @@ function BillTracker({ saved, userId, userName, initialLastEditedBy }) {
                   <span className="tier-sum">{money(monSum)}/mo · {money(balSum)} balance</span>
                 </div>
                 {!collapsed && (
+                  <div className="ledger-scroll">
                   <table className="ledger">
+                    <colgroup>
+                      {Object.values(debtsCols.widths).map((w, i) => <col key={i} style={{ width: w }} />)}
+                    </colgroup>
                     <thead>
                       <tr>
-                        <th style={{ width: "17%" }}>Name</th>
-                        <th style={{ width: "10%" }}>Type</th>
-                        <th style={{ width: "11%" }} title="Which payoff tier this debt belongs to">Category</th>
-                        <th style={{ width: "8%" }}>Monthly</th>
-                        <th style={{ width: "11%" }}>Balance</th>
-                        <th style={{ width: "8%" }}>APR %</th>
-                        <th style={{ width: "6%" }}>Due day</th>
-                        <th style={{ width: "5%" }} title="Days after due date before it's actually late">Grace</th>
-                        <th style={{ width: "6%" }} title="Counts toward your debt-free projection">Goal</th>
-                        <th style={{ width: "6%" }} title="OK to split across this month's paychecks with no real downside">Split OK</th>
-                        <th style={{ width: 30 }} title="Autopay"></th>
-                        <th style={{ width: 30 }}></th>
+                        <ResizableTh width={debtsCols.widths.name} colKey="name" startResize={debtsCols.startResize}>Name</ResizableTh>
+                        <ResizableTh width={debtsCols.widths.type} colKey="type" startResize={debtsCols.startResize}>Type</ResizableTh>
+                        <ResizableTh width={debtsCols.widths.category} colKey="category" startResize={debtsCols.startResize} title="Which payoff tier this debt belongs to">Category</ResizableTh>
+                        <ResizableTh width={debtsCols.widths.monthly} colKey="monthly" startResize={debtsCols.startResize}>Monthly</ResizableTh>
+                        <ResizableTh width={debtsCols.widths.balance} colKey="balance" startResize={debtsCols.startResize}>Balance</ResizableTh>
+                        <ResizableTh width={debtsCols.widths.apr} colKey="apr" startResize={debtsCols.startResize}>APR %</ResizableTh>
+                        <ResizableTh width={debtsCols.widths.dueDay} colKey="dueDay" startResize={debtsCols.startResize}>Due day</ResizableTh>
+                        <ResizableTh width={debtsCols.widths.grace} colKey="grace" startResize={debtsCols.startResize} title="Days after due date before it's actually late">Grace</ResizableTh>
+                        <ResizableTh width={debtsCols.widths.goal} colKey="goal" startResize={debtsCols.startResize} title="Counts toward your debt-free projection">Goal</ResizableTh>
+                        <ResizableTh width={debtsCols.widths.splitOk} colKey="splitOk" startResize={debtsCols.startResize} title="OK to split across this month's paychecks with no real downside">Split OK</ResizableTh>
+                        <th style={{ width: debtsCols.widths.autopay }} title="Autopay"></th>
+                        <th style={{ width: debtsCols.widths.del }}></th>
                       </tr>
                     </thead>
                     <tbody>
@@ -1522,6 +1630,7 @@ function BillTracker({ saved, userId, userName, initialLastEditedBy }) {
                       ))}
                     </tbody>
                   </table>
+                  </div>
                 )}
               </div>
             );
@@ -1537,21 +1646,25 @@ function BillTracker({ saved, userId, userName, initialLastEditedBy }) {
               </div>
               {!collapsedTiers.protected && (
                 <>
+                  <div className="ledger-scroll">
                   <table className="ledger">
+                    <colgroup>
+                      {Object.values(debtsCols.widths).map((w, i) => <col key={i} style={{ width: w }} />)}
+                    </colgroup>
                     <thead>
                       <tr>
-                        <th style={{ width: "17%" }}>Name</th>
-                        <th style={{ width: "10%" }}>Type</th>
-                        <th style={{ width: "11%" }} title="Which payoff tier this debt belongs to">Category</th>
-                        <th style={{ width: "8%" }}>Monthly</th>
-                        <th style={{ width: "11%" }}>Balance</th>
-                        <th style={{ width: "8%" }}>APR %</th>
-                        <th style={{ width: "6%" }}>Due day</th>
-                        <th style={{ width: "5%" }}>Grace</th>
-                        <th style={{ width: "6%" }} title="Counts toward your debt-free projection">Goal</th>
-                        <th style={{ width: "6%" }} title="OK to split across this month's paychecks with no real downside">Split OK</th>
-                        <th style={{ width: 30 }} title="Autopay"></th>
-                        <th style={{ width: 30 }}></th>
+                        <ResizableTh width={debtsCols.widths.name} colKey="name" startResize={debtsCols.startResize}>Name</ResizableTh>
+                        <ResizableTh width={debtsCols.widths.type} colKey="type" startResize={debtsCols.startResize}>Type</ResizableTh>
+                        <ResizableTh width={debtsCols.widths.category} colKey="category" startResize={debtsCols.startResize} title="Which payoff tier this debt belongs to">Category</ResizableTh>
+                        <ResizableTh width={debtsCols.widths.monthly} colKey="monthly" startResize={debtsCols.startResize}>Monthly</ResizableTh>
+                        <ResizableTh width={debtsCols.widths.balance} colKey="balance" startResize={debtsCols.startResize}>Balance</ResizableTh>
+                        <ResizableTh width={debtsCols.widths.apr} colKey="apr" startResize={debtsCols.startResize}>APR %</ResizableTh>
+                        <ResizableTh width={debtsCols.widths.dueDay} colKey="dueDay" startResize={debtsCols.startResize}>Due day</ResizableTh>
+                        <ResizableTh width={debtsCols.widths.grace} colKey="grace" startResize={debtsCols.startResize}>Grace</ResizableTh>
+                        <ResizableTh width={debtsCols.widths.goal} colKey="goal" startResize={debtsCols.startResize} title="Counts toward your debt-free projection">Goal</ResizableTh>
+                        <ResizableTh width={debtsCols.widths.splitOk} colKey="splitOk" startResize={debtsCols.startResize} title="OK to split across this month's paychecks with no real downside">Split OK</ResizableTh>
+                        <th style={{ width: debtsCols.widths.autopay }} title="Autopay"></th>
+                        <th style={{ width: debtsCols.widths.del }}></th>
                       </tr>
                     </thead>
                     <tbody>
@@ -1589,6 +1702,7 @@ function BillTracker({ saved, userId, userName, initialLastEditedBy }) {
                       ))}
                     </tbody>
                   </table>
+                  </div>
                   <div className="protected-note">These count toward your DTI and never get extra payments. Tick "Goal" if you want one counted toward your debt-free date — it needs a balance to be projectable. "Total debt-free" above only counts ones with a balance entered.</div>
                 </>
               )}
@@ -1607,18 +1721,22 @@ function BillTracker({ saved, userId, userName, initialLastEditedBy }) {
             <button className="btn btn-primary btn-sm" onClick={() => setShowAddFixed(true)}><Plus size={13} /> Add expense</button>
           </div>
           <div className="card">
+            <div className="ledger-scroll">
             <table className="ledger">
+              <colgroup>
+                {Object.values(fixedCols.widths).map((w, i) => <col key={i} style={{ width: w }} />)}
+              </colgroup>
               <thead>
                 <tr>
-                  <th style={{ width: "20%" }}>Name</th>
-                  <th style={{ width: "12%" }}>Type</th>
-                  <th style={{ width: "10%" }}>Monthly</th>
-                  <th style={{ width: "8%" }}>Due day</th>
-                  <th style={{ width: "7%" }}>Grace</th>
-                  <th style={{ width: "8%" }} title="OK to split across this month's paychecks with no real downside">Split OK</th>
-                  <th style={{ width: "28%" }}>Note</th>
-                  <th style={{ width: 30 }} title="Autopay"></th>
-                  <th style={{ width: 30 }}></th>
+                  <ResizableTh width={fixedCols.widths.name} colKey="name" startResize={fixedCols.startResize}>Name</ResizableTh>
+                  <ResizableTh width={fixedCols.widths.type} colKey="type" startResize={fixedCols.startResize}>Type</ResizableTh>
+                  <ResizableTh width={fixedCols.widths.monthly} colKey="monthly" startResize={fixedCols.startResize}>Monthly</ResizableTh>
+                  <ResizableTh width={fixedCols.widths.dueDay} colKey="dueDay" startResize={fixedCols.startResize}>Due day</ResizableTh>
+                  <ResizableTh width={fixedCols.widths.grace} colKey="grace" startResize={fixedCols.startResize}>Grace</ResizableTh>
+                  <ResizableTh width={fixedCols.widths.splitOk} colKey="splitOk" startResize={fixedCols.startResize} title="OK to split across this month's paychecks with no real downside">Split OK</ResizableTh>
+                  <ResizableTh width={fixedCols.widths.note} colKey="note" startResize={fixedCols.startResize}>Note</ResizableTh>
+                  <th style={{ width: fixedCols.widths.autopay }} title="Autopay"></th>
+                  <th style={{ width: fixedCols.widths.del }}></th>
                 </tr>
               </thead>
               <tbody>
@@ -1647,6 +1765,7 @@ function BillTracker({ saved, userId, userName, initialLastEditedBy }) {
                 ))}
               </tbody>
             </table>
+            </div>
           </div>
         </div>
         </>

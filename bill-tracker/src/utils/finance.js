@@ -181,20 +181,38 @@ export function computeAllRunningBalances(debts, paidByMonth) {
   return result;
 }
 
+// A protected ("forever") debt never receives extra payments by design —
+// so if its own minimum doesn't even cover the interest it's accruing,
+// there is no path to ever paying it off: it compounds forever. Left in
+// the simulation, that's not a slow realistic decline, it's unbounded
+// exponential growth (a few thousand dollars can reach into the millions
+// within a few decades) that swamps the whole household's projection.
+// Real minimums usually scale with balance (e.g. "2% or $25, whichever is
+// greater"); this app's minimum is a fixed number that never adjusts, so
+// nothing here would ever catch up on its own.
+function isUnderwater(d) {
+  const apr = Number(d.apr) || 0;
+  if (apr <= 0) return false;
+  return Number(d.monthly || 0) < monthlyInterest(Number(d.balance || 0), apr);
+}
+
 // Simulates forward month by month.
 export function simulatePayoff(debts, recurringExtra, boosts, strategy, opts = {}) {
   const capMonths = opts.capMonths || 480;
   const { income, targetDTI, mortgageEstimate } = opts;
 
+  const underwaterProtected = debts.filter((d) => d.isDebt !== false && d.protected && d.balance > 0 && isUnderwater(d));
+  const frozenBalance = underwaterProtected.reduce((s, d) => s + Number(d.balance || 0), 0);
+
   const constantMonthly = debts
-    .filter((d) => d.isDebt !== false && (d.balance === null || d.balance === undefined))
+    .filter((d) => d.isDebt !== false && (d.balance === null || d.balance === undefined || (d.protected && isUnderwater(d))))
     .reduce((s, d) => s + Number(d.monthly || 0), 0);
 
   let working = debts
-    .filter((d) => d.isDebt !== false && d.balance > 0)
+    .filter((d) => d.isDebt !== false && d.balance > 0 && !(d.protected && isUnderwater(d)))
     .map((d) => ({ ...d }));
 
-  const series = [{ month: 0, label: "Now", total: working.reduce((s, d) => s + d.balance, 0) }];
+  const series = [{ month: 0, label: "Now", total: working.reduce((s, d) => s + d.balance, 0) + frozenBalance }];
   let freedomMonth = null;
   let fullFreedomMonth = null;
   let dtiTargetMonth = null;
@@ -228,13 +246,15 @@ export function simulatePayoff(debts, recurringExtra, boosts, strategy, opts = {
     }
     for (const d of working) if (d.balance < 0.5) d.balance = 0;
 
-    const total = working.reduce((s, d) => s + d.balance, 0);
+    const total = working.reduce((s, d) => s + d.balance, 0) + frozenBalance;
     series.push({ month: m, label: monthLabel(m), total: Math.round(total) });
 
     const goalDebts = working.filter((d) => !d.excludeFromGoal);
     if (freedomMonth === null && goalDebts.every((d) => d.balance <= 0)) freedomMonth = m;
-    if (fullFreedomMonth === null && working.every((d) => d.balance <= 0)) fullFreedomMonth = m;
-    
+    // Can never be "fully" debt-free while an underwater forever loan is
+    // permanently excluded from ever reaching $0 — see isUnderwater above.
+    if (fullFreedomMonth === null && underwaterProtected.length === 0 && working.every((d) => d.balance <= 0)) fullFreedomMonth = m;
+
     if (wantDti && (dtiTargetMonth === null || dtiWithMortgageTargetMonth === null)) {
       const monthlyLeft = constantMonthly + working.filter((d) => d.balance > 0).reduce((s, d) => s + Number(d.monthly || 0), 0);
       if (dtiTargetMonth === null && (monthlyLeft / income) * 100 <= targetDTI) dtiTargetMonth = m;
@@ -243,7 +263,10 @@ export function simulatePayoff(debts, recurringExtra, boosts, strategy, opts = {
 
     if (freedomMonth !== null && fullFreedomMonth !== null && (!wantDti || (dtiTargetMonth !== null && dtiWithMortgageTargetMonth !== null))) break;
   }
-  return { series, freedomMonth, fullFreedomMonth, dtiTargetMonth, dtiWithMortgageTargetMonth };
+  return {
+    series, freedomMonth, fullFreedomMonth, dtiTargetMonth, dtiWithMortgageTargetMonth,
+    underwaterDebts: underwaterProtected.map((d) => d.name),
+  };
 }
 
 export function fastestStrategyForBoost(debts, boostAmount, recurringExtra, existingBoosts) {
