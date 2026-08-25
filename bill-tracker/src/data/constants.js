@@ -26,6 +26,14 @@ export const FIXED_CATEGORY_OPTIONS = [
   "Rent/Mortgage", "Utility", "Childcare", "Insurance", "Subscription", "Other"
 ];
 
+// Categories for manually-logged, day-to-day spending on the Expenses tab —
+// distinct from CATEGORY_OPTIONS/FIXED_CATEGORY_OPTIONS above, which are
+// for recurring debts/bills, not one-off purchases.
+export const EXPENSE_CATEGORIES = [
+  "Groceries", "Gas", "Fast Food", "Dining Out", "Shopping",
+  "Entertainment", "Health", "Household", "Subscriptions", "Travel", "Other",
+];
+
 let _id = 1000;
 export const nextId = () => `b${_id++}`;
 

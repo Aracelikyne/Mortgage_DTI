@@ -5,7 +5,7 @@ import {
 import {
   Home, KeyRound, Lock, Plus, Trash2, ChevronDown, ChevronUp, ChevronLeft, ChevronRight,
   Wallet, TrendingDown, Sparkles, PiggyBank, Calendar, LogOut, CheckCircle2, Circle, Pencil, Clock, Zap, FlaskConical,
-  LayoutDashboard, Receipt, ListChecks, Activity, GripVertical
+  LayoutDashboard, Receipt, ListChecks, Activity, GripVertical, ShoppingCart
 } from "lucide-react";
 
 // Import your extracted logic and components
@@ -17,6 +17,7 @@ import AutopaySettingsModal from "./components/AutopaySettingsModal";
 import PresenceBar from "./components/PresenceBar";
 import CursorOverlay from "./components/CursorOverlay";
 import NotesPanel from "./components/NotesPanel";
+import ExpenseTracker from "./components/ExpenseTracker";
 import { describeChanges } from "./utils/activity";
 import { useLiveFollow } from "./hooks/useLiveFollow";
 import { supabase } from "./lib/supabaseClient";
@@ -84,6 +85,7 @@ const NAV_ITEMS = [
   { key: "debts", label: "Debts", icon: PiggyBank },
   { key: "fixed", label: "Fixed Expenses", icon: Receipt },
   { key: "monthly", label: "Monthly Plan", icon: ListChecks },
+  { key: "expenses", label: "Expenses", icon: ShoppingCart },
   { key: "activity", label: "Activity", icon: Activity },
 ];
 
@@ -1909,6 +1911,16 @@ function BillTracker({ saved, userId, userName, initialLastEditedBy }) {
             fixed={fixed}
             paidByMonth={paidByMonth}
             setPaidByMonth={setPaidByMonth}
+          />
+        )}
+
+        {page === "expenses" && (
+          <ExpenseTracker
+            debts={debtBills}
+            fixed={fixed}
+            paidByMonth={paidByMonth}
+            userId={userId}
+            userName={userName}
           />
         )}
 

@@ -181,6 +181,41 @@ export function computeAllRunningBalances(debts, paidByMonth) {
   return result;
 }
 
+// Every logged bill/debt payment, reshaped into the same {amount, date,
+// category, note} shape as a manually-logged expense — so the Expenses tab
+// can show "money going out the door" as one combined feed without storing
+// a second, driftable copy of what's already tracked in paidByMonth. Source
+// is tagged "bill" so the UI can tell these apart from manual entries (they
+// aren't editable/deletable from the Expenses tab — that happens on the
+// Monthly Plan, where the underlying payment actually lives).
+export function derivedBillExpenses(debts, fixed, paidByMonth) {
+  const bills = new Map([
+    ...debts.filter((d) => d.isDebt !== false).map((d) => [d.id, { name: d.name, category: d.type }]),
+    ...fixed.map((f) => [f.id, { name: f.name, category: f.type }]),
+  ]);
+  const out = [];
+  for (const [monthKey, monthEntry] of Object.entries(paidByMonth || {})) {
+    for (const billId of Object.keys(monthEntry)) {
+      const bill = bills.get(billId);
+      if (!bill) continue;
+      const rec = getPaymentRecord(monthEntry, { id: billId });
+      for (const p of rec.payments) {
+        const amount = Number(p.amount) || 0;
+        if (amount <= 0) continue;
+        out.push({
+          id: `bill:${billId}:${p.id}`,
+          amount,
+          date: p.date || `${monthKey}-01`,
+          category: bill.category || "Other",
+          note: bill.name,
+          source: "bill",
+        });
+      }
+    }
+  }
+  return out;
+}
+
 // A protected ("forever") debt never receives extra payments by design —
 // so if its own minimum doesn't even cover the interest it's accruing,
 // there is no path to ever paying it off: it compounds forever. Left in
