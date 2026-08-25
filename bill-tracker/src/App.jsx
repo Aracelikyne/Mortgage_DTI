@@ -17,6 +17,7 @@ import AutopaySettingsModal from "./components/AutopaySettingsModal";
 import PresenceBar from "./components/PresenceBar";
 import CursorOverlay from "./components/CursorOverlay";
 import NotesPanel from "./components/NotesPanel";
+import NotificationSettings from "./components/NotificationSettings";
 import ExpenseTracker from "./components/ExpenseTracker";
 import { describeChanges } from "./utils/activity";
 import { useLiveFollow } from "./hooks/useLiveFollow";
@@ -1085,6 +1086,7 @@ function BillTracker({ saved, userId, userName, initialLastEditedBy }) {
               </div>
             )}
           </div>
+          <NotificationSettings userId={userId} userName={userName} />
           <NotesPanel userId={userId} userName={userName} />
           {!spectating && (
             <button

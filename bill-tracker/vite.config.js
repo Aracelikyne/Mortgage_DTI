@@ -10,13 +10,17 @@ export default defineConfig({
     VitePWA({
       registerType: 'autoUpdate',
       injectRegister: 'auto',
-      // Only the app shell (JS/CSS/HTML/icons) gets precached for offline
-      // opening — Supabase requests are cross-origin and untouched by this,
-      // so balances and payments always come straight from the network,
-      // never a stale cached copy.
-      workbox: {
+      // injectManifest (a custom src/sw.js, bundled at build time) instead
+      // of generateSW — push notifications need a `push` event listener,
+      // which generateSW's auto-generated worker has no hook for. The
+      // precaching behavior is unchanged: same app shell, same "Supabase
+      // calls are cross-origin and untouched" guarantee, just declared in
+      // src/sw.js instead of here.
+      strategies: 'injectManifest',
+      srcDir: 'src',
+      filename: 'sw.js',
+      injectManifest: {
         globPatterns: ['**/*.{js,css,html,svg,png,ico}'],
-        navigateFallback: '/Mortgage_DTI/index.html',
       },
       manifest: {
         name: 'Clear to Close',
