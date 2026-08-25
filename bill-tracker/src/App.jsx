@@ -8,7 +8,7 @@ import {
 } from "lucide-react";
 
 // Import your extracted logic and components
-import { CATEGORY_OPTIONS, FIXED_CATEGORY_OPTIONS, TIERS, initialDebts, initialFixed, nextId } from "./data/constants";
+import { CATEGORY_OPTIONS, FIXED_CATEGORY_OPTIONS, TIERS, PRIORITY_OPTIONS, initialDebts, initialFixed, nextId } from "./data/constants";
 import { allocateExtra, allocateMaxCashFlow, buildPaycheckPlan, fastestStrategyForBoost, minimumAdjustedDebts, money, monthLabel, monthLabelFull, pct, simulatePayoff, fmtDate, monthKeyOf, getPaymentRecord, addPaymentRecord, removePaymentRecord, updatePaymentRecord, clearPaymentRecord, isoDate, isPaymentSettled, computeAllRunningBalances } from "./utils/finance";
 import AddDebtModal from "./components/AddDebtModal";
 import AddFixedModal from "./components/AddFixedModal";
@@ -19,6 +19,17 @@ import NotesPanel from "./components/NotesPanel";
 import { describeChanges } from "./utils/activity";
 import { useLiveFollow } from "./hooks/useLiveFollow";
 import { supabase } from "./lib/supabaseClient";
+
+const NAV_ITEMS = [
+  { key: "dashboard", label: "Dashboard" },
+  { key: "budget", label: "Income & Budget" },
+  { key: "timeline", label: "Payoff Timeline" },
+  { key: "paycheck", label: "Paycheck Plan" },
+  { key: "debts", label: "Debts" },
+  { key: "fixed", label: "Fixed Expenses" },
+  { key: "monthly", label: "Monthly Plan" },
+  { key: "activity", label: "Activity" },
+];
 
 // One-time migration from the old localStorage-only version of the app.
 function readLegacyLocalState() {
@@ -523,6 +534,19 @@ function BillTracker({ saved, userId, userName, initialLastEditedBy }) {
     const rb = runningBalances[d.id];
     return rb && rb.balance !== null && rb.balance !== undefined ? rb.balance : Number(d.balance || 0);
   }
+  // Which payoff category a debt belongs to, and how to move it to another
+  // one — a single control that replaces having to know that "protected"
+  // and "priority" are two separate fields under the hood.
+  function categoryValueOf(d) {
+    return d.protected ? "protected" : String(d.priority ?? 2);
+  }
+  function updateDebtCategory(id, value) {
+    if (value === "protected") {
+      updateDebt(id, { protected: true, priority: null, excludeFromGoal: true });
+    } else {
+      updateDebt(id, { protected: false, priority: Number(value), excludeFromGoal: false });
+    }
+  }
   // Small hint under the editable (anchor) Balance input showing where the
   // balance actually stands today, once payments since the anchor date
   // have moved it — or a warning if underpaying interest is growing it.
@@ -645,13 +669,37 @@ function BillTracker({ saved, userId, userName, initialLastEditedBy }) {
           font-family: 'Inter', sans-serif;
           background: var(--paper);
           color: var(--ink);
-          min-height: 100%;
-          padding: 28px 20px 60px;
+          min-height: 100vh;
+          display: flex;
+          align-items: flex-start;
           box-sizing: border-box;
         }
         .ctc-app * { box-sizing: border-box; }
         .ctc-mono { font-family: 'IBM Plex Mono', monospace; font-variant-numeric: tabular-nums; }
         .ctc-shell { max-width: 1400px; margin: 0 auto; }
+
+        .ctc-sidebar {
+          width: 232px; flex-shrink: 0; padding: 26px 16px; position: sticky; top: 0;
+          align-self: flex-start; max-height: 100vh; overflow-y: auto; border-right: 1px solid var(--line);
+        }
+        .ctc-main { flex: 1; min-width: 0; padding: 28px 20px 60px; }
+        .sidebar-nav { margin-top: 22px; display: flex; flex-direction: column; gap: 2px; }
+        .sidebar-link {
+          display: flex; align-items: center; width: 100%; text-align: left; padding: 9px 12px;
+          border-radius: 4px; font-size: 13.5px; font-weight: 600; color: var(--ink-soft);
+          background: transparent; border: none; cursor: pointer; font-family: 'Inter', sans-serif;
+        }
+        .sidebar-link:hover { background: rgba(0,0,0,0.05); }
+        .sidebar-link.active { background: var(--ink); color: var(--paper); }
+        @media (max-width: 860px) {
+          .ctc-app { flex-direction: column; }
+          .ctc-sidebar {
+            width: 100%; position: static; max-height: none; border-right: none;
+            border-bottom: 1px solid var(--line); padding: 16px 20px;
+          }
+          .sidebar-nav { margin-top: 12px; flex-direction: row; flex-wrap: wrap; }
+          .sidebar-link { width: auto; }
+        }
 
         .ctc-eyebrow {
           font-family: 'IBM Plex Mono', monospace;
@@ -823,37 +871,49 @@ function BillTracker({ saved, userId, userName, initialLastEditedBy }) {
         .footnote { font-size: 12px; color: var(--ink-soft); margin-top: 30px; border-top: 1px solid var(--line); padding-top: 14px; line-height: 1.6; }
       `}</style>
 
+      <nav className="ctc-sidebar">
+        <div className="ctc-eyebrow">Debt payoff & DTI tracker</div>
+        <h1 className="ctc-title" style={{ fontSize: 24 }}>Clear to Close</h1>
+        <div className="sidebar-nav">
+          {NAV_ITEMS.map((item) => (
+            <button
+              key={item.key}
+              className={`sidebar-link ${page === item.key ? "active" : ""}`}
+              onClick={() => setPage(item.key)}
+            >
+              {item.label}
+            </button>
+          ))}
+        </div>
+      </nav>
+
+      <div className="ctc-main">
       <div className="ctc-shell">
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
-          <div>
-            <div className="ctc-eyebrow">Debt payoff & DTI tracker</div>
-            <h1 className="ctc-title">Clear to Close</h1>
-          </div>
-          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-            <div style={{ textAlign: "right" }}>
-              <div className="ctc-hint">
-                {saveStatus === "saving" && "Saving…"}
-                {saveStatus === "saved" && "Saved"}
-                {saveStatus === "error" && <span style={{ color: "var(--brick)" }}>Couldn't save</span>}
-              </div>
-              {lastEditedBy.name && (
-                <div className="ctc-hint" style={{ fontSize: 11 }}>
-                  Last edit: {lastEditedBy.name}{lastEditedBy.at ? ` · ${relativeTime(lastEditedBy.at)}` : ""}
-                </div>
-              )}
+        <div style={{ display: "flex", justifyContent: "flex-end", alignItems: "flex-start", flexWrap: "wrap", gap: 10 }}>
+          <div style={{ textAlign: "right" }}>
+            <div className="ctc-hint">
+              {saveStatus === "saving" && "Saving…"}
+              {saveStatus === "saved" && "Saved"}
+              {saveStatus === "error" && <span style={{ color: "var(--brick)" }}>Couldn't save</span>}
             </div>
-            {!spectating && (
-              <button
-                className="btn btn-ghost btn-sm"
-                style={sandboxActive ? { background: "#E8B44A", borderColor: "#C99A2E" } : undefined}
-                onClick={sandboxActive ? exitSandbox : enterSandbox}
-                title="Try out numbers without affecting the real tracker"
-              >
-                <FlaskConical size={13} /> {sandboxActive ? "Exit sandbox" : "Sandbox"}
-              </button>
+            {lastEditedBy.name && (
+              <div className="ctc-hint" style={{ fontSize: 11 }}>
+                Last edit: {lastEditedBy.name}{lastEditedBy.at ? ` · ${relativeTime(lastEditedBy.at)}` : ""}
+              </div>
             )}
-            <button className="btn btn-ghost btn-sm" onClick={() => supabase.auth.signOut()}><LogOut size={13} /> Sign out ({userName})</button>
           </div>
+          <NotesPanel userId={userId} userName={userName} />
+          {!spectating && (
+            <button
+              className="btn btn-ghost btn-sm"
+              style={sandboxActive ? { background: "#E8B44A", borderColor: "#C99A2E" } : undefined}
+              onClick={sandboxActive ? exitSandbox : enterSandbox}
+              title="Try out numbers without affecting the real tracker"
+            >
+              <FlaskConical size={13} /> {sandboxActive ? "Exit sandbox" : "Sandbox"}
+            </button>
+          )}
+          <button className="btn btn-ghost btn-sm" onClick={() => supabase.auth.signOut()}><LogOut size={13} /> Sign out ({userName})</button>
         </div>
 
         <PresenceBar
@@ -866,7 +926,6 @@ function BillTracker({ saved, userId, userName, initialLastEditedBy }) {
         />
 
         <CursorOverlay leaderState={leaderState} currentPage={page} />
-        <NotesPanel userId={userId} userName={userName} />
 
         {sandboxActive && (
           <div style={{
@@ -894,18 +953,7 @@ function BillTracker({ saved, userId, userName, initialLastEditedBy }) {
           </div>
         )}
 
-        <div style={{ pointerEvents: spectating ? "none" : undefined, userSelect: spectating ? "none" : undefined, opacity: spectating ? 0.85 : 1 }}>
-
-        <div className="strategy-pills" style={{ marginTop: 10, marginBottom: 4, flexWrap: "wrap" }}>
-          <button className={`pill ${page === "dashboard" ? "active" : ""}`} onClick={() => setPage("dashboard")}>Dashboard</button>
-          <button className={`pill ${page === "budget" ? "active" : ""}`} onClick={() => setPage("budget")}>Income & Budget</button>
-          <button className={`pill ${page === "timeline" ? "active" : ""}`} onClick={() => setPage("timeline")}>Payoff Timeline</button>
-          <button className={`pill ${page === "paycheck" ? "active" : ""}`} onClick={() => setPage("paycheck")}>Paycheck Plan</button>
-          <button className={`pill ${page === "debts" ? "active" : ""}`} onClick={() => setPage("debts")}>Debts</button>
-          <button className={`pill ${page === "fixed" ? "active" : ""}`} onClick={() => setPage("fixed")}>Fixed Expenses</button>
-          <button className={`pill ${page === "monthly" ? "active" : ""}`} onClick={() => setPage("monthly")}>Monthly Plan</button>
-          <button className={`pill ${page === "activity" ? "active" : ""}`} onClick={() => setPage("activity")}>Activity</button>
-        </div>
+        <div style={{ pointerEvents: spectating ? "none" : undefined, userSelect: spectating ? "none" : undefined, opacity: spectating ? 0.85 : 1, marginTop: 10 }}>
 
         {page === "dashboard" && (
         <>
@@ -1425,15 +1473,16 @@ function BillTracker({ saved, userId, userName, initialLastEditedBy }) {
                   <table className="ledger">
                     <thead>
                       <tr>
-                        <th style={{ width: "21%" }}>Name</th>
-                        <th style={{ width: "13%" }}>Type</th>
-                        <th style={{ width: "9%" }}>Monthly</th>
-                        <th style={{ width: "12%" }}>Balance</th>
-                        <th style={{ width: "9%" }}>APR %</th>
-                        <th style={{ width: "7%" }}>Due day</th>
-                        <th style={{ width: "6%" }} title="Days after due date before it's actually late">Grace</th>
-                        <th style={{ width: "7%" }} title="Counts toward your debt-free projection">Goal</th>
-                        <th style={{ width: "7%" }} title="OK to split across this month's paychecks with no real downside">Split OK</th>
+                        <th style={{ width: "17%" }}>Name</th>
+                        <th style={{ width: "10%" }}>Type</th>
+                        <th style={{ width: "11%" }} title="Which payoff tier this debt belongs to">Category</th>
+                        <th style={{ width: "8%" }}>Monthly</th>
+                        <th style={{ width: "11%" }}>Balance</th>
+                        <th style={{ width: "8%" }}>APR %</th>
+                        <th style={{ width: "6%" }}>Due day</th>
+                        <th style={{ width: "5%" }} title="Days after due date before it's actually late">Grace</th>
+                        <th style={{ width: "6%" }} title="Counts toward your debt-free projection">Goal</th>
+                        <th style={{ width: "6%" }} title="OK to split across this month's paychecks with no real downside">Split OK</th>
                         <th style={{ width: 30 }} title="Autopay"></th>
                         <th style={{ width: 30 }}></th>
                       </tr>
@@ -1445,6 +1494,11 @@ function BillTracker({ saved, userId, userName, initialLastEditedBy }) {
                           <td>
                             <select value={d.type} onChange={(e) => updateDebt(d.id, { type: e.target.value })}>
                               {CATEGORY_OPTIONS.map((c) => <option key={c} value={c}>{c}</option>)}
+                            </select>
+                          </td>
+                          <td>
+                            <select value={categoryValueOf(d)} onChange={(e) => updateDebtCategory(d.id, e.target.value)}>
+                              {PRIORITY_OPTIONS.map((c) => <option key={c.value} value={c.value}>{c.label}</option>)}
                             </select>
                           </td>
                           <td><input type="number" value={d.monthly} onChange={(e) => updateDebt(d.id, { monthly: Number(e.target.value) })} /></td>
@@ -1486,14 +1540,16 @@ function BillTracker({ saved, userId, userName, initialLastEditedBy }) {
                   <table className="ledger">
                     <thead>
                       <tr>
-                        <th style={{ width: "24%" }}>Name</th>
-                        <th style={{ width: "14%" }}>Type</th>
-                        <th style={{ width: "10%" }}>Monthly</th>
-                        <th style={{ width: "14%" }}>Balance</th>
-                        <th style={{ width: "8%" }}>Due day</th>
-                        <th style={{ width: "7%" }}>Grace</th>
-                        <th style={{ width: "8%" }} title="Counts toward your debt-free projection">Goal</th>
-                        <th style={{ width: "8%" }} title="OK to split across this month's paychecks with no real downside">Split OK</th>
+                        <th style={{ width: "17%" }}>Name</th>
+                        <th style={{ width: "10%" }}>Type</th>
+                        <th style={{ width: "11%" }} title="Which payoff tier this debt belongs to">Category</th>
+                        <th style={{ width: "8%" }}>Monthly</th>
+                        <th style={{ width: "11%" }}>Balance</th>
+                        <th style={{ width: "8%" }}>APR %</th>
+                        <th style={{ width: "6%" }}>Due day</th>
+                        <th style={{ width: "5%" }}>Grace</th>
+                        <th style={{ width: "6%" }} title="Counts toward your debt-free projection">Goal</th>
+                        <th style={{ width: "6%" }} title="OK to split across this month's paychecks with no real downside">Split OK</th>
                         <th style={{ width: 30 }} title="Autopay"></th>
                         <th style={{ width: 30 }}></th>
                       </tr>
@@ -1507,8 +1563,14 @@ function BillTracker({ saved, userId, userName, initialLastEditedBy }) {
                               {CATEGORY_OPTIONS.map((c) => <option key={c} value={c}>{c}</option>)}
                             </select>
                           </td>
+                          <td>
+                            <select value={categoryValueOf(d)} onChange={(e) => updateDebtCategory(d.id, e.target.value)}>
+                              {PRIORITY_OPTIONS.map((c) => <option key={c.value} value={c.value}>{c.label}</option>)}
+                            </select>
+                          </td>
                           <td><input type="number" value={d.monthly} onChange={(e) => updateDebt(d.id, { monthly: Number(e.target.value) })} /></td>
                           <td><input type="number" placeholder="unknown" value={d.balance ?? ""} onChange={(e) => updateDebt(d.id, { balance: e.target.value === "" ? null : Number(e.target.value) })} />{renderBalanceHint(d)}</td>
+                          <td><input type="number" placeholder="—" value={d.apr ?? ""} onChange={(e) => updateDebt(d.id, { apr: e.target.value === "" ? null : Number(e.target.value) })} /></td>
                           <td><input type="number" min="1" max="31" placeholder="—" value={d.dueDay ?? ""} onChange={(e) => updateDebt(d.id, { dueDay: e.target.value === "" ? null : Number(e.target.value) })} /></td>
                           <td><input type="number" min="0" placeholder="0" value={d.graceDays ?? 0} onChange={(e) => updateDebt(d.id, { graceDays: e.target.value === "" ? 0 : Number(e.target.value) })} /></td>
                           <td style={{ textAlign: "center" }}>
@@ -1609,6 +1671,7 @@ function BillTracker({ saved, userId, userName, initialLastEditedBy }) {
           guidelines, not a specific lender's requirement — actual qualifying DTI varies by loan program and lender. This
           tool isn't financial or lending advice. Your data is saved to your account automatically as you go, and only visible when you're signed in.
         </div>
+      </div>
       </div>
 
       {showAddDebt && <AddDebtModal onClose={() => setShowAddDebt(false)} onAdd={addDebt} />}

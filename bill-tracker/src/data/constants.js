@@ -7,6 +7,16 @@ export const TIERS = {
   4: { label: "Deprioritized", color: "#8A8272" },
 };
 
+// The category dropdown on each debt row: the four payoff tiers, plus the
+// escape hatch for a debt that isn't part of the payoff plan at all.
+export const PRIORITY_OPTIONS = [
+  { value: "1", label: `1 · ${TIERS[1].label}` },
+  { value: "2", label: `2 · ${TIERS[2].label}` },
+  { value: "3", label: `3 · ${TIERS[3].label}` },
+  { value: "4", label: `4 · ${TIERS[4].label}` },
+  { value: "protected", label: "Forever loan (minimum only)" },
+];
+
 export const CATEGORY_OPTIONS = [
   "Credit Card", "Personal Loan", "Auto Loan", "Student Loan",
   "Bootcamp Loan", "Retail Card", "Other Loan",

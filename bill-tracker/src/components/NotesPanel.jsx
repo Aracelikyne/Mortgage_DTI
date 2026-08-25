@@ -81,7 +81,6 @@ export default function NotesPanel({ userId, userName }) {
     <>
       <button
         className="btn btn-ghost btn-sm"
-        style={{ position: "fixed", top: 16, right: open ? 336 : 16, zIndex: 101, transition: "right 0.2s ease" }}
         onClick={() => setOpen((o) => !o)}
         title="Shared notebook"
       >
