@@ -10,7 +10,7 @@ import {
 
 // Import your extracted logic and components
 import { CATEGORY_OPTIONS, FIXED_CATEGORY_OPTIONS, TIERS, PRIORITY_OPTIONS, initialDebts, initialFixed, nextId } from "./data/constants";
-import { allocateExtra, allocateMaxCashFlow, buildPaycheckPlan, fastestStrategyForBoost, minimumAdjustedDebts, money, monthLabel, monthLabelFull, pct, simulatePayoff, fmtDate, monthKeyOf, getPaymentRecord, addPaymentRecord, removePaymentRecord, updatePaymentRecord, clearPaymentRecord, isoDate, isPaymentSettled, computeAllRunningBalances, isUnderwater } from "./utils/finance";
+import { allocateExtra, allocateMaxCashFlow, buildPaycheckPlan, fastestStrategyForBoost, minimumAdjustedDebts, money, monthLabel, monthLabelFull, pct, simulatePayoff, fmtDate, monthKeyOf, getPaymentRecord, addPaymentRecord, removePaymentRecord, updatePaymentRecord, clearPaymentRecord, isoDate, isPaymentSettled, computeAllRunningBalances, isUnderwater, willNeverGetExtra } from "./utils/finance";
 import AddDebtModal from "./components/AddDebtModal";
 import AddFixedModal from "./components/AddFixedModal";
 import AutopaySettingsModal from "./components/AutopaySettingsModal";
@@ -653,10 +653,11 @@ function BillTracker({ saved, userId, userName, initialLastEditedBy }) {
     const rb = runningBalances[d.id];
     if (!rb || rb.balance === null || rb.balance === undefined) return null;
     // rb.growing looks backward (did past payments outpace interest?); a
-    // protected/forever debt also needs a forward-looking check, since its
+    // debt that will never get extra payments — protected, or just
+    // unchecked from "Goal" — also needs a forward-looking check, since its
     // minimum never gets extra help — so raising or lowering that minimum
     // should flip this note immediately, not just once new payments land.
-    const growing = rb.growing || (d.protected && isUnderwater({ ...d, balance: rb.balance }));
+    const growing = rb.growing || (willNeverGetExtra(d) && isUnderwater({ ...d, balance: rb.balance }));
     const diff = Math.abs(rb.balance - Number(d.balance || 0));
     if (diff < 0.5 && !growing) return null;
     return (
@@ -1481,9 +1482,11 @@ function BillTracker({ saved, userId, userName, initialLastEditedBy }) {
           {sim.underwaterDebts && sim.underwaterDebts.length > 0 && (
             <div className="warning-box" style={{ marginBottom: 14 }}>
               <strong>Heads up:</strong> {sim.underwaterDebts.join(", ")} {sim.underwaterDebts.length > 1 ? "have" : "has"} a minimum
-              payment that doesn't cover its own interest. Since forever loans never get extra payments, at current terms{" "}
+              payment that doesn't cover its own interest, and never gets extra payments — either it's marked "minimum only,
+              forever," or its "Goal" checkbox is unticked. At current terms{" "}
               {sim.underwaterDebts.length > 1 ? "these will" : "this will"} never pay down — its balance is held flat in this
-              projection rather than shown compounding forever. Raise the minimum, or double-check the APR, on the Debts tab.
+              projection rather than shown compounding forever. Raise the minimum, double-check the APR, or reconsider the
+              Goal checkbox, on the Debts tab.
             </div>
           )}
           <div className="card">

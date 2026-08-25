@@ -231,20 +231,32 @@ export function isUnderwater(d) {
   return Number(d.monthly || 0) < monthlyInterest(Number(d.balance || 0), apr);
 }
 
+// True for any debt allocateExtra (above) will never send a dollar to —
+// either because it's marked "minimum only, forever," or because its
+// "Goal" checkbox is unticked (excluded from the payoff goal). Both mean
+// the same thing for the simulation below: nothing but its own minimum
+// will ever touch this balance, so if that minimum doesn't even cover
+// interest, it has to be frozen the same way — otherwise it compounds
+// unchecked for the full projection window with no code path that could
+// ever pay it down, ballooning the chart into the millions.
+export function willNeverGetExtra(d) {
+  return !!(d.protected || d.excludeFromGoal);
+}
+
 // Simulates forward month by month.
 export function simulatePayoff(debts, recurringExtra, boosts, strategy, opts = {}) {
   const capMonths = opts.capMonths || 480;
   const { income, targetDTI, mortgageEstimate } = opts;
 
-  const underwaterProtected = debts.filter((d) => d.isDebt !== false && d.protected && d.balance > 0 && isUnderwater(d));
-  const frozenBalance = underwaterProtected.reduce((s, d) => s + Number(d.balance || 0), 0);
+  const underwaterFrozen = debts.filter((d) => d.isDebt !== false && willNeverGetExtra(d) && d.balance > 0 && isUnderwater(d));
+  const frozenBalance = underwaterFrozen.reduce((s, d) => s + Number(d.balance || 0), 0);
 
   const constantMonthly = debts
-    .filter((d) => d.isDebt !== false && (d.balance === null || d.balance === undefined || (d.protected && isUnderwater(d))))
+    .filter((d) => d.isDebt !== false && (d.balance === null || d.balance === undefined || (willNeverGetExtra(d) && isUnderwater(d))))
     .reduce((s, d) => s + Number(d.monthly || 0), 0);
 
   let working = debts
-    .filter((d) => d.isDebt !== false && d.balance > 0 && !(d.protected && isUnderwater(d)))
+    .filter((d) => d.isDebt !== false && d.balance > 0 && !(willNeverGetExtra(d) && isUnderwater(d)))
     .map((d) => ({ ...d }));
 
   const series = [{ month: 0, label: "Now", total: working.reduce((s, d) => s + d.balance, 0) + frozenBalance }];
@@ -288,7 +300,7 @@ export function simulatePayoff(debts, recurringExtra, boosts, strategy, opts = {
     if (freedomMonth === null && goalDebts.every((d) => d.balance <= 0)) freedomMonth = m;
     // Can never be "fully" debt-free while an underwater forever loan is
     // permanently excluded from ever reaching $0 — see isUnderwater above.
-    if (fullFreedomMonth === null && underwaterProtected.length === 0 && working.every((d) => d.balance <= 0)) fullFreedomMonth = m;
+    if (fullFreedomMonth === null && underwaterFrozen.length === 0 && working.every((d) => d.balance <= 0)) fullFreedomMonth = m;
 
     if (wantDti && (dtiTargetMonth === null || dtiWithMortgageTargetMonth === null)) {
       const monthlyLeft = constantMonthly + working.filter((d) => d.balance > 0).reduce((s, d) => s + Number(d.monthly || 0), 0);
@@ -300,7 +312,7 @@ export function simulatePayoff(debts, recurringExtra, boosts, strategy, opts = {
   }
   return {
     series, freedomMonth, fullFreedomMonth, dtiTargetMonth, dtiWithMortgageTargetMonth,
-    underwaterDebts: underwaterProtected.map((d) => d.name),
+    underwaterDebts: underwaterFrozen.map((d) => d.name),
   };
 }
 
@@ -318,10 +330,12 @@ export function fastestStrategyForBoost(debts, boostAmount, recurringExtra, exis
 }
 
 export function simulatePayoffWithFirstMoveOverride(debts, recurringExtra, existingBoosts, boostAmount, capMonths = 480) {
+  const underwaterFrozen = debts.filter((d) => d.isDebt !== false && willNeverGetExtra(d) && d.balance > 0 && isUnderwater(d));
+  const frozenBalance = underwaterFrozen.reduce((s, d) => s + Number(d.balance || 0), 0);
   let working = debts
-    .filter((d) => d.isDebt !== false && d.balance > 0)
+    .filter((d) => d.isDebt !== false && d.balance > 0 && !(willNeverGetExtra(d) && isUnderwater(d)))
     .map((d) => ({ ...d }));
-  const series = [{ month: 0, label: "Now", total: working.reduce((s, d) => s + d.balance, 0) }];
+  const series = [{ month: 0, label: "Now", total: working.reduce((s, d) => s + d.balance, 0) + frozenBalance }];
   let freedomMonth = null;
 
   for (let m = 1; m <= capMonths; m++) {
@@ -342,7 +356,7 @@ export function simulatePayoffWithFirstMoveOverride(debts, recurringExtra, exist
       for (const d of working) if (applied[d.id]) d.balance = Math.max(0, d.balance - applied[d.id]);
     }
     for (const d of working) if (d.balance < 0.5) d.balance = 0;
-    const total = working.reduce((s, d) => s + d.balance, 0);
+    const total = working.reduce((s, d) => s + d.balance, 0) + frozenBalance;
     series.push({ month: m, label: monthLabel(m), total: Math.round(total) });
     const goalDebts = working.filter((d) => !d.excludeFromGoal);
     if (goalDebts.every((d) => d.balance <= 0) && freedomMonth === null) {
