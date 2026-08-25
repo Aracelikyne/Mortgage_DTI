@@ -657,7 +657,12 @@ function BillTracker({ saved, userId, userName, initialLastEditedBy }) {
     // unchecked from "Goal" — also needs a forward-looking check, since its
     // minimum never gets extra help — so raising or lowering that minimum
     // should flip this note immediately, not just once new payments land.
-    const growing = rb.growing || (willNeverGetExtra(d) && isUnderwater({ ...d, balance: rb.balance }));
+    // sim.stillGrowingDebts covers the third case: a targetable debt that's
+    // still net-growing at the end of the projection because its turn in
+    // the payoff order never comes within the window.
+    const growing = rb.growing
+      || (willNeverGetExtra(d) && isUnderwater({ ...d, balance: rb.balance }))
+      || (sim.stillGrowingDebts || []).includes(d.name);
     const diff = Math.abs(rb.balance - Number(d.balance || 0));
     if (diff < 0.5 && !growing) return null;
     return (
@@ -1487,6 +1492,16 @@ function BillTracker({ saved, userId, userName, initialLastEditedBy }) {
               {sim.underwaterDebts.length > 1 ? "these will" : "this will"} never pay down — its balance is held flat in this
               projection rather than shown compounding forever. Raise the minimum, double-check the APR, or reconsider the
               Goal checkbox, on the Debts tab.
+            </div>
+          )}
+          {sim.stillGrowingDebts && sim.stillGrowingDebts.length > 0 && (
+            <div className="warning-box" style={{ marginBottom: 14 }}>
+              <strong>Heads up:</strong> {sim.stillGrowingDebts.join(", ")} {sim.stillGrowingDebts.length > 1 ? "are" : "is"} still
+              growing at the end of this projection — {sim.stillGrowingDebts.length > 1 ? "they're" : "it's"} eligible for extra
+              payments, but {sim.stillGrowingDebts.length > 1 ? "sit" : "sits"} far enough behind other debts in the payoff order
+              that {sim.stillGrowingDebts.length > 1 ? "they never" : "it never"} gets any within this window, so interest keeps
+              outpacing the minimum the whole time. Move it to a higher-priority tier, raise its minimum, or increase your extra
+              payment, on the Debts tab.
             </div>
           )}
           <div className="card">

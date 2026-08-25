@@ -258,6 +258,7 @@ export function simulatePayoff(debts, recurringExtra, boosts, strategy, opts = {
   let working = debts
     .filter((d) => d.isDebt !== false && d.balance > 0 && !(willNeverGetExtra(d) && isUnderwater(d)))
     .map((d) => ({ ...d }));
+  const startingBalances = new Map(working.map((d) => [d.id, d.balance]));
 
   const series = [{ month: 0, label: "Now", total: working.reduce((s, d) => s + d.balance, 0) + frozenBalance }];
   let freedomMonth = null;
@@ -310,9 +311,22 @@ export function simulatePayoff(debts, recurringExtra, boosts, strategy, opts = {
 
     if (freedomMonth !== null && fullFreedomMonth !== null && (!wantDti || (dtiTargetMonth !== null && dtiWithMortgageTargetMonth !== null))) break;
   }
+
+  // underwaterDebts (above) only catches debts structurally barred from
+  // ever getting extra money. This catches the other way a debt can spiral
+  // in the projection: it's perfectly eligible for extra payments, but
+  // sits behind other debts in the payoff order long enough that its own
+  // interest outgrows it before its turn ever comes — same runaway-chart
+  // symptom, different cause, so it needs its own name in the "Heads up"
+  // banner rather than silently inflating the total with no explanation.
+  const stillGrowingDebts = working
+    .filter((d) => d.balance > 0 && d.balance > (startingBalances.get(d.id) || 0) + 1)
+    .map((d) => d.name);
+
   return {
     series, freedomMonth, fullFreedomMonth, dtiTargetMonth, dtiWithMortgageTargetMonth,
     underwaterDebts: underwaterFrozen.map((d) => d.name),
+    stillGrowingDebts,
   };
 }
 
