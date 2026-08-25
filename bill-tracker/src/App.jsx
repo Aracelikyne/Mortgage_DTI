@@ -806,6 +806,7 @@ function BillTracker({ saved, userId, userName, initialLastEditedBy }) {
           .ctc-sidebar, .ctc-sidebar.collapsed {
             width: 100%; position: static; max-height: none; border-right: none;
             border-bottom: 1px solid var(--line); padding: 16px 20px;
+            padding-top: calc(16px + env(safe-area-inset-top, 0px));
           }
           .ctc-sidebar.collapsed .ctc-eyebrow, .ctc-sidebar.collapsed .ctc-title, .ctc-sidebar.collapsed .sidebar-link-label { display: block; }
           .ctc-sidebar.collapsed .sidebar-link-label { display: inline; }
@@ -999,6 +1000,27 @@ function BillTracker({ saved, userId, userName, initialLastEditedBy }) {
         .modal-foot { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; }
 
         .footnote { font-size: 12px; color: var(--ink-soft); margin-top: 30px; border-top: 1px solid var(--line); padding-top: 14px; line-height: 1.6; }
+
+        /* Installed on a phone, the top nav row reads as a website; a fixed
+           bottom tab bar reads as an app. Swaps in below the same 860px
+           breakpoint where the sidebar already collapses. */
+        .bottom-tabbar { display: none; }
+        .tabbar-link {
+          flex: 1; display: flex; align-items: center; justify-content: center;
+          padding: 9px 2px; border: none; background: transparent; color: var(--ink-soft);
+          border-radius: 6px; cursor: pointer;
+        }
+        .tabbar-link.active { color: var(--brass-deep); background: rgba(184,134,63,0.14); }
+        @media (max-width: 860px) {
+          .sidebar-nav { display: none; }
+          .bottom-tabbar {
+            display: flex; position: fixed; left: 0; right: 0; bottom: 0; z-index: 40;
+            background: var(--card); border-top: 1px solid var(--line);
+            padding: 4px 4px calc(4px + env(safe-area-inset-bottom, 0px));
+            justify-content: space-between; overflow-x: auto;
+          }
+          .ctc-main { padding-bottom: calc(72px + env(safe-area-inset-bottom, 0px)); }
+        }
       `}</style>
 
       <nav className={`ctc-sidebar ${sidebarCollapsed ? "collapsed" : ""}`}>
@@ -1028,6 +1050,23 @@ function BillTracker({ saved, userId, userName, initialLastEditedBy }) {
           })}
         </div>
       </nav>
+
+      <div className="bottom-tabbar">
+        {NAV_ITEMS.map((item) => {
+          const Icon = item.icon;
+          return (
+            <button
+              key={item.key}
+              className={`tabbar-link ${page === item.key ? "active" : ""}`}
+              onClick={() => setPage(item.key)}
+              title={item.label}
+              aria-label={item.label}
+            >
+              <Icon size={20} />
+            </button>
+          );
+        })}
+      </div>
 
       <div className="ctc-main">
       <div className="ctc-shell">
