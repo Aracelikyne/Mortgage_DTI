@@ -33,7 +33,12 @@ export function useLiveFollow({ userId, userName, page, onLeaderUpdate }) {
     channel
       .on("presence", { event: "sync" }, () => {
         const state = channel.presenceState();
-        const others = Object.values(state).flat().filter((u) => u.userId !== userId);
+        // One entry per person, not per device — someone signed in on a
+        // phone and a laptop at once shows up twice in raw presence.
+        const others = [];
+        for (const u of Object.values(state).flat()) {
+          if (u.userId !== userId && !others.some((o) => o.userId === u.userId)) others.push(u);
+        }
         setOnlineUsers(others);
         // Whoever we're following just went offline — nothing left to watch.
         // Handled right here, in the callback that caused it, rather than a

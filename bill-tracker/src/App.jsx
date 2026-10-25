@@ -9,7 +9,11 @@ import {
 } from "lucide-react";
 
 // Import your extracted logic and components
-import { CATEGORY_OPTIONS, FIXED_CATEGORY_OPTIONS, TIERS, PRIORITY_OPTIONS, initialDebts, initialFixed, nextId } from "./data/constants";
+import { CATEGORY_OPTIONS, FIXED_CATEGORY_OPTIONS, TIERS, PRIORITY_OPTIONS, initialDebts, initialFixed } from "./data/constants";
+import { newId, repairDuplicateIds } from "./utils/ids";
+import { sameData } from "./utils/sameData";
+import { persistIdRepair, rememberIdRepair, readIdRepairNotice, dismissIdRepairNotice } from "./lib/idRepair";
+import IdRepairBanner from "./components/IdRepairBanner";
 import { allocateExtra, allocateMaxCashFlow, buildPaycheckPlan, fastestStrategyForBoost, minimumAdjustedDebts, money, monthLabel, monthLabelFull, pct, simulatePayoff, fmtDate, monthKeyOf, getPaymentRecord, addPaymentRecord, removePaymentRecord, updatePaymentRecord, clearPaymentRecord, isoDate, isPaymentSettled, computeAllRunningBalances, isUnderwater, willNeverGetExtra } from "./utils/finance";
 import AddDebtModal from "./components/AddDebtModal";
 import AddFixedModal from "./components/AddFixedModal";
@@ -126,6 +130,9 @@ export default function App() {
   const [saved, setSaved] = useState(null); // null until the row has been fetched
   const [initialLastEditedBy, setInitialLastEditedBy] = useState({ name: null, at: null });
   const [loadError, setLoadError] = useState(null);
+  // An id repair that couldn't be written at load (its backup failed) —
+  // handed to BillTracker so its next save retries it, backup first.
+  const [pendingIdRepair, setPendingIdRepair] = useState(null);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => setSession(data.session ?? null));
@@ -154,6 +161,27 @@ export default function App() {
         }
 
         if (data?.data) {
+          // Older sessions handed out the same ids over and over (see
+          // utils/ids.js) — unlink any records still sharing one before
+          // anything gets a chance to edit them as a pair.
+          const { data: repaired, report } = repairDuplicateIds(data.data);
+          if (report.changed) {
+            const userName = displayNameFor(session.user);
+            const result = await persistIdRepair({ original: data.data, repaired, report, userId: session.user.id, userName });
+            rememberIdRepair(report, result); // even if this run was superseded — the repair itself still happened
+            if (cancelled) return;
+            if (result.ok && !result.handledElsewhere) {
+              setInitialLastEditedBy({ name: userName, at: result.savedAt });
+            } else if (result.ok) {
+              setInitialLastEditedBy({ name: data.updated_by_name, at: data.updated_at });
+            } else {
+              console.error(result.error);
+              setPendingIdRepair({ original: data.data, repaired, report });
+              setInitialLastEditedBy({ name: data.updated_by_name, at: data.updated_at });
+            }
+            setSaved(repaired);
+            return;
+          }
           setSaved(data.data);
           setInitialLastEditedBy({ name: data.updated_by_name, at: data.updated_at });
           return;
@@ -169,19 +197,31 @@ export default function App() {
           .maybeSingle();
         const legacy = legacyRow?.data || readLegacyLocalState();
         if (legacy && Object.keys(legacy).length > 0) {
-          const { error: upsertError } = await supabase.from("household_state").upsert({
-            id: "household",
-            data: legacy,
-            updated_at: new Date().toISOString(),
-            updated_by_id: session.user.id,
-            updated_by_name: displayNameFor(session.user),
-          });
+          // Legacy data came from the same id counter, so it gets the same
+          // repair — with the untouched legacy blob backed up first.
+          const { data: repaired, report } = repairDuplicateIds(legacy);
+          let upsertError;
+          if (report.changed) {
+            const result = await persistIdRepair({ original: legacy, repaired, report, userId: session.user.id, userName: displayNameFor(session.user) });
+            rememberIdRepair(report, result);
+            if (cancelled) return;
+            upsertError = result.ok ? null : result.error;
+          } else {
+            ({ error: upsertError } = await supabase.from("household_state").upsert({
+              id: "household",
+              data: legacy,
+              updated_at: new Date().toISOString(),
+              updated_by_id: session.user.id,
+              updated_by_name: displayNameFor(session.user),
+            }));
+          }
           if (cancelled) return;
           if (upsertError) {
             console.error(upsertError);
             setLoadError("Couldn't save the imported data to Supabase — the household_state table may be missing (see supabase/shared_data_migration.sql). Your edits from here may not save either.");
+            if (report.changed) setPendingIdRepair({ original: legacy, repaired, report });
           }
-          setSaved(legacy);
+          setSaved(repaired);
           setInitialLastEditedBy({ name: displayNameFor(session.user), at: new Date().toISOString() });
           return;
         }
@@ -216,6 +256,7 @@ export default function App() {
         userId={session.user.id}
         userName={displayNameFor(session.user)}
         initialLastEditedBy={initialLastEditedBy}
+        initialPendingIdRepair={pendingIdRepair}
       />
     </>
   );
@@ -252,7 +293,7 @@ function AuthScreen({ loading }) {
   );
 }
 
-function BillTracker({ saved, userId, userName, initialLastEditedBy }) {
+function BillTracker({ saved, userId, userName, initialLastEditedBy, initialPendingIdRepair }) {
   const [debts, setDebts] = useState(saved.debts || initialDebts);
   const [paidOffDebts, setPaidOffDebts] = useState(saved.paidOffDebts || []);
   const [fixed, setFixed] = useState(saved.fixed || initialFixed);
@@ -263,9 +304,9 @@ function BillTracker({ saved, userId, userName, initialLastEditedBy }) {
   const [strategy, setStrategy] = useState(saved.strategy || "tiered");
   const [targetDTI, setTargetDTI] = useState(saved.targetDTI ?? 43);
   const [mortgageEstimate, setMortgageEstimate] = useState(saved.mortgageEstimate ?? 3000);
-  const [incomeSources, setIncomeSources] = useState(saved.incomeSources || [
-    { id: nextId(), name: "Your paycheck", amount: "", nextPayDate: "", frequency: "biweekly" },
-    { id: nextId(), name: "Partner's paycheck", amount: "", nextPayDate: "", frequency: "biweekly" },
+  const [incomeSources, setIncomeSources] = useState(() => saved.incomeSources || [
+    { id: newId(), name: "Your paycheck", amount: "", nextPayDate: "", frequency: "biweekly" },
+    { id: newId(), name: "Partner's paycheck", amount: "", nextPayDate: "", frequency: "biweekly" },
   ]);
   const [boosts, setBoosts] = useState(saved.boosts || []);
   const [paycheckReserve, setPaycheckReserve] = useState(saved.paycheckReserve ?? 500);
@@ -357,11 +398,45 @@ function BillTracker({ saved, userId, userName, initialLastEditedBy }) {
   // "everything was just added."
   const lastSavedState = useRef(saved);
 
+  // An id repair (see utils/ids.js) that still has to reach the shared row.
+  // Every save waits on it, so repaired data is never written before the
+  // untouched original has been backed up.
+  const pendingIdRepair = useRef(initialPendingIdRepair || null);
+  const idRepairInFlight = useRef(null);
+  const [idRepairNotice, setIdRepairNotice] = useState(readIdRepairNotice);
+  const runPendingIdRepair = useCallback(() => {
+    if (idRepairInFlight.current) return idRepairInFlight.current;
+    if (!pendingIdRepair.current) return Promise.resolve(true);
+    // Loops so a newer repair queued while one is still being written (two
+    // broken saves arriving back to back) goes out right after it.
+    const drain = async () => {
+      while (pendingIdRepair.current) {
+        const job = pendingIdRepair.current;
+        const result = await persistIdRepair({ ...job, userId, userName });
+        setIdRepairNotice(rememberIdRepair(job.report, result));
+        if (!result.ok) {
+          console.error(result.error);
+          return false;
+        }
+        if (pendingIdRepair.current === job) pendingIdRepair.current = null;
+        if (!result.handledElsewhere) setLastEditedBy({ name: userName, at: result.savedAt });
+      }
+      return true;
+    };
+    idRepairInFlight.current = drain().finally(() => { idRepairInFlight.current = null; });
+    return idRepairInFlight.current;
+  }, [userId, userName]);
+
   // Replaces every piece of local state with a freshly loaded shared row —
   // used both to seed a follow session with the leader's current data, and
   // to silently absorb the other person's saves while nothing here is
   // pending, instead of making every load go through a full page refresh.
-  const applyLoadedState = useCallback((data) => {
+  // A device still running an older build can keep minting duplicate ids,
+  // so whatever arrives gets the same repair the initial load does — and
+  // the repair is written right away (it's the real shared data, never
+  // sandbox numbers, so that's safe even mid-sandbox or while following).
+  const applyLoadedState = useCallback((incoming) => {
+    const { data, report } = repairDuplicateIds(incoming || {});
     setDebts(data.debts || initialDebts);
     setPaidOffDebts(data.paidOffDebts || []);
     setFixed(data.fixed || initialFixed);
@@ -379,7 +454,11 @@ function BillTracker({ saved, userId, userName, initialLastEditedBy }) {
     setDebtBaseline(data.debtBaseline ?? null);
     setPaycheckOverrides(data.paycheckOverrides || {});
     lastSavedState.current = data;
-  }, []);
+    if (report.changed) {
+      pendingIdRepair.current = { original: incoming, repaired: data, report };
+      runPendingIdRepair();
+    }
+  }, [runPendingIdRepair]);
 
   const refetchHousehold = useCallback(async () => {
     const { data, error } = await supabase
@@ -417,13 +496,21 @@ function BillTracker({ saved, userId, userName, initialLastEditedBy }) {
     latestState.current = { debts, paidOffDebts, fixed, income, netIncome, includeRent, recurringExtra, strategy, targetDTI, mortgageEstimate, incomeSources, boosts, paycheckReserve, paidByMonth, debtBaseline, paycheckOverrides };
   });
 
-  const flushSave = useCallback(() => {
+  const flushSave = useCallback(async () => {
     if (saveTimer.current) {
       clearTimeout(saveTimer.current);
       saveTimer.current = null;
     }
-    setSaveStatus("saving");
     const nextState = latestState.current;
+    if (sameData(nextState, lastSavedState.current)) {
+      setSaveStatus((s) => (s === "saving" ? "saved" : s));
+      return;
+    }
+    setSaveStatus("saving");
+    if (pendingIdRepair.current && !(await runPendingIdRepair())) {
+      setSaveStatus("error");
+      return;
+    }
     const changes = describeChanges(lastSavedState.current, nextState);
     const now = new Date().toISOString();
     supabase
@@ -450,7 +537,7 @@ function BillTracker({ saved, userId, userName, initialLastEditedBy }) {
             .then(({ error: logErr }) => { if (logErr) console.error(logErr); });
         }
       });
-  }, [userId, userName]);
+  }, [userId, userName, runPendingIdRepair]);
 
   useEffect(() => {
     if (isFirstRender.current) {
@@ -464,6 +551,17 @@ function BillTracker({ saved, userId, userName, initialLastEditedBy }) {
     // debounced save entirely. Sandbox edits are never saved either — the
     // whole point is a detour that leaves the shared data untouched.
     if (spectatingRef.current || sandboxActiveRef.current) return;
+    // Absorbing the other person's save (applyLoadedState) replaces every
+    // piece of state at once without making it any different from what's
+    // saved. Saving that straight back used to bounce one edit between two
+    // open devices indefinitely — each echo re-triggering the other's save.
+    if (sameData(latestState.current, lastSavedState.current)) {
+      if (saveTimer.current) {
+        clearTimeout(saveTimer.current);
+        saveTimer.current = null;
+      }
+      return;
+    }
     setSaveStatus("saving");
     if (saveTimer.current) clearTimeout(saveTimer.current);
     saveTimer.current = setTimeout(flushSave, 700);
@@ -657,12 +755,12 @@ function BillTracker({ saved, userId, userName, initialLastEditedBy }) {
     // unchecked from "Goal" — also needs a forward-looking check, since its
     // minimum never gets extra help — so raising or lowering that minimum
     // should flip this note immediately, not just once new payments land.
-    // sim.stillGrowingDebts covers the third case: a targetable debt that's
+    // sim.stillGrowingDebtIds covers the third case: a targetable debt that's
     // still net-growing at the end of the projection because its turn in
     // the payoff order never comes within the window.
     const growing = rb.growing
       || (willNeverGetExtra(d) && isUnderwater({ ...d, balance: rb.balance }))
-      || (sim.stillGrowingDebts || []).includes(d.name);
+      || (sim.stillGrowingDebtIds || []).includes(d.id);
     const diff = Math.abs(rb.balance - Number(d.balance || 0));
     if (diff < 0.5 && !growing) return null;
     return (
@@ -703,7 +801,8 @@ function BillTracker({ saved, userId, userName, initialLastEditedBy }) {
     setPaidOffDebts((prev) => prev.filter((x) => x.id !== id));
   }
   function addDebt(newDebt) {
-    setDebts((prev) => [...prev, { id: nextId(), excludeFromGoal: false, protected: false, apr: null, dueDay: null, ...newDebt }]);
+    const debt = { id: newId(), excludeFromGoal: false, protected: false, apr: null, dueDay: null, ...newDebt };
+    setDebts((prev) => [...prev, debt]);
     setShowAddDebt(false);
   }
   function updateFixed(id, patch) {
@@ -713,7 +812,8 @@ function BillTracker({ saved, userId, userName, initialLastEditedBy }) {
     setFixed((prev) => prev.filter((f) => f.id !== id));
   }
   function addFixed(newFixed) {
-    setFixed((prev) => [...prev, { id: nextId(), note: "", dueDay: null, graceDays: 0, ...newFixed }]);
+    const item = { id: newId(), note: "", dueDay: null, graceDays: 0, ...newFixed };
+    setFixed((prev) => [...prev, item]);
     setShowAddFixed(false);
   }
 
@@ -724,7 +824,12 @@ function BillTracker({ saved, userId, userName, initialLastEditedBy }) {
     setIncomeSources((prev) => prev.filter((s) => s.id !== id));
   }
   function addIncomeSource() {
-    setIncomeSources((prev) => [...prev, { id: nextId(), name: "New paycheck", amount: "", nextPayDate: "", frequency: "biweekly" }]);
+    const source = { id: newId(), name: "New paycheck", amount: "", nextPayDate: "", frequency: "biweekly" };
+    setIncomeSources((prev) => [...prev, source]);
+  }
+  function addBoost() {
+    const boost = { id: newId(), month: 3, amount: 1000 };
+    setBoosts((prev) => [...prev, boost]);
   }
 
   function buildRows(applied, sourceDebts) {
@@ -1004,6 +1109,10 @@ function BillTracker({ saved, userId, userName, initialLastEditedBy }) {
           font-size: 12.5px; color: #6B2E26; background: #F0D8D3; border: 1px solid #DDB4AA; border-radius: 3px;
           padding: 10px 12px; margin-bottom: 14px; line-height: 1.5;
         }
+        .repair-banner {
+          font-size: 13px; color: #1F3B26; background: #DCE6DB; border: 1px solid #A9C2AD; border-radius: 4px;
+          padding: 12px 14px; margin-top: 10px; line-height: 1.5;
+        }
 
         .paycheck-row { display: flex; gap: 12px; overflow-x: auto; padding-bottom: 6px; margin-top: 4px; }
         .paycheck-card {
@@ -1183,6 +1292,11 @@ function BillTracker({ saved, userId, userName, initialLastEditedBy }) {
             <button className="btn btn-primary btn-sm" onClick={() => window.location.reload()}>Reload</button>
           </div>
         )}
+
+        <IdRepairBanner
+          notice={idRepairNotice}
+          onDismiss={() => { dismissIdRepairNotice(); setIdRepairNotice(null); }}
+        />
 
         <div style={{ pointerEvents: spectating ? "none" : undefined, userSelect: spectating ? "none" : undefined, opacity: spectating ? 0.85 : 1, marginTop: 10 }}>
 
@@ -1482,7 +1596,7 @@ function BillTracker({ saved, userId, userName, initialLastEditedBy }) {
         <div className="ctc-section">
           <div className="ctc-section-head">
             <div className="ctc-h2"><TrendingDown size={18} /> Payoff timeline</div>
-            <button className="btn btn-ghost btn-sm" onClick={() => setBoosts((b) => [...b, { id: nextId(), month: 3, amount: 1000 }])}><Plus size={13} /> Add one-time boost</button>
+            <button className="btn btn-ghost btn-sm" onClick={addBoost}><Plus size={13} /> Add one-time boost</button>
           </div>
           {sim.underwaterDebts && sim.underwaterDebts.length > 0 && (
             <div className="warning-box" style={{ marginBottom: 14 }}>

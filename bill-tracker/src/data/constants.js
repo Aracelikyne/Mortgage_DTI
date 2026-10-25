@@ -34,8 +34,8 @@ export const EXPENSE_CATEGORIES = [
   "Entertainment", "Health", "Household", "Subscriptions", "Travel", "Other",
 ];
 
-let _id = 1000;
-export const nextId = () => `b${_id++}`;
+// New ids come from newId() in src/utils/ids.js — never a counter, which
+// restarts on every page load and hands out ids that are already taken.
 
 // No personal financial data belongs here — this file is public source code.
 // Real debts/expenses are entered in the app and saved per-account in Supabase.

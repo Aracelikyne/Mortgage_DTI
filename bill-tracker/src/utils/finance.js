@@ -203,7 +203,10 @@ export function derivedBillExpenses(debts, fixed, paidByMonth) {
         const amount = Number(p.amount) || 0;
         if (amount <= 0) continue;
         out.push({
-          id: `bill:${billId}:${p.id}`,
+          // Month included: every pre-"multiple payments" record reads back
+          // with the same payment id ("legacy"), so the same bill in two
+          // different months would otherwise collide as React keys.
+          id: `bill:${monthKey}:${billId}:${p.id}`,
           amount,
           date: p.date || `${monthKey}-01`,
           category: bill.category || "Other",
@@ -319,14 +322,15 @@ export function simulatePayoff(debts, recurringExtra, boosts, strategy, opts = {
   // interest outgrows it before its turn ever comes — same runaway-chart
   // symptom, different cause, so it needs its own name in the "Heads up"
   // banner rather than silently inflating the total with no explanation.
-  const stillGrowingDebts = working
-    .filter((d) => d.balance > 0 && d.balance > (startingBalances.get(d.id) || 0) + 1)
-    .map((d) => d.name);
+  const stillGrowing = working.filter((d) => d.balance > 0 && d.balance > (startingBalances.get(d.id) || 0) + 1);
 
   return {
     series, freedomMonth, fullFreedomMonth, dtiTargetMonth, dtiWithMortgageTargetMonth,
     underwaterDebts: underwaterFrozen.map((d) => d.name),
-    stillGrowingDebts,
+    // Names are for display only — anything that needs to find "this
+    // debt" in the list matches by id, since two debts can share a name.
+    stillGrowingDebts: stillGrowing.map((d) => d.name),
+    stillGrowingDebtIds: stillGrowing.map((d) => d.id),
   };
 }
 

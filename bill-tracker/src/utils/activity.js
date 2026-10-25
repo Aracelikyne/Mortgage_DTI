@@ -76,7 +76,10 @@ function diffScalar(prev, next, key, label, changes, fmt = (v) => v) {
 export function describeChanges(prev, next) {
   if (!prev) return [];
   const changes = [];
+  // Payments stay keyed by bill id after a debt moves to Paid Off, so the
+  // archive needs to be in here too or those show up as a raw id.
   const billNames = new Map([
+    ...nameLookup(prev.paidOffDebts, next.paidOffDebts),
     ...nameLookup(prev.debts, next.debts),
     ...nameLookup(prev.fixed, next.fixed),
   ]);
