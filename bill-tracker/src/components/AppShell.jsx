@@ -1,11 +1,12 @@
 import { useCallback, useMemo, useState } from "react";
-import { ArrowUpDown, Bell, Ellipsis, FlaskConical, LogOut, NotebookPen } from "lucide-react";
+import { ArrowUpDown, Bell, Ellipsis, FileUp, FlaskConical, LogOut, NotebookPen } from "lucide-react";
 import Sidebar from "./ui/Sidebar";
 import TabBar from "./ui/TabBar";
 import Switch from "./ui/Switch";
 import CursorOverlay from "./CursorOverlay";
 import NotesSheet from "./NotesSheet";
 import TabOrderSheet from "./TabOrderSheet";
+import ImportSheet from "./ImportSheet";
 import DashboardPage from "../pages/DashboardPage";
 import BudgetPage from "../pages/BudgetPage";
 import TimelinePage from "../pages/TimelinePage";
@@ -68,6 +69,7 @@ export default function AppShell({ saved, userId, userName, initialLastEditedBy,
   const notes = useNotes({ userId, userName });
   const [showNotes, setShowNotes] = useState(false);
   const [showTabOrder, setShowTabOrder] = useState(false);
+  const [importTarget, setImportTarget] = useState(null); // "debts" | "fixed" | "expenses" while the import sheet is open
 
   // Per-device preferences — which tabs matter most, and whether the
   // sidebar is collapsed, don't need to match between two people.
@@ -124,6 +126,7 @@ export default function AppShell({ saved, userId, userName, initialLastEditedBy,
     notes,
     openNotes: () => setShowNotes(true),
     openTabOrder: () => setShowTabOrder(true),
+    openImport: (target = "debts") => setImportTarget(target),
     signOut: () => supabase.auth.signOut(),
   };
 
@@ -145,6 +148,9 @@ export default function AppShell({ saved, userId, userName, initialLastEditedBy,
           {!sidebarCollapsed && (
             <div className="sidebar-section">
               <div className="sidebar-section-title">Tools</div>
+              <button type="button" className="sidebar-item" onClick={() => setImportTarget(page === "fixed" ? "fixed" : page === "expenses" ? "expenses" : "debts")}>
+                <FileUp size={21} aria-hidden="true" /><span className="sidebar-label">Import from Numbers</span>
+              </button>
               <button type="button" className="sidebar-item" onClick={() => setShowNotes(true)}>
                 <NotebookPen size={21} aria-hidden="true" /><span className="sidebar-label">Shared Notes</span>
                 {notes.notes.length > 0 && <span className="sidebar-count num">{notes.notes.length}</span>}
@@ -192,6 +198,7 @@ export default function AppShell({ saved, userId, userName, initialLastEditedBy,
       {showNotes && (
         <NotesSheet notes={notes.notes} loadError={notes.loadError} onAdd={notes.addNote} onRemove={notes.removeNote} onClose={() => setShowNotes(false)} />
       )}
+      {importTarget && <ImportSheet initialTarget={importTarget} onClose={() => setImportTarget(null)} />}
       {showTabOrder && (
         <TabOrderSheet items={orderedNavItems} onClose={() => setShowTabOrder(false)} onSave={setNavOrder} />
       )}

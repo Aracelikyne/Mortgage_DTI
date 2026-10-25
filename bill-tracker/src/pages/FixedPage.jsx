@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Plus, Zap } from "lucide-react";
+import { FileUp, Plus, Zap } from "lucide-react";
 import PageHeader from "../components/PageHeader";
 import FixedEditorSheet from "../components/FixedEditorSheet";
 import { ListRow, ListSection } from "../components/ui/List";
@@ -7,7 +7,7 @@ import { money } from "../utils/finance";
 import { ordinal } from "../utils/format";
 import { useHouseholdContext } from "../state/HouseholdContext";
 
-export default function FixedPage({ headerActions }) {
+export default function FixedPage() {
   const h = useHouseholdContext();
   const [editing, setEditing] = useState(null); // an item, or "new"
   const editingItem = editing && editing !== "new" ? editing : null;
@@ -18,7 +18,7 @@ export default function FixedPage({ headerActions }) {
         title="Fixed Expenses"
         actions={(
           <>
-            {headerActions}
+            <button type="button" className="nav-btn" onClick={() => h.openImport("fixed")} aria-label="Import from Numbers" title="Import from Numbers"><FileUp size={22} /></button>
             <button type="button" className="nav-btn" onClick={() => setEditing("new")} aria-label="Add expense" title="Add expense"><Plus size={24} /></button>
           </>
         )}

@@ -1,5 +1,6 @@
 import { useEffect, useId, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { ChevronLeft } from "lucide-react";
 import { SheetCloseContext, useCloseSheet } from "./sheetContext";
 import { ListButton } from "./List";
 
@@ -16,7 +17,8 @@ let openSheets = 0;
 // required field is empty). Without `onDone`, the right button just closes.
 // Controls in the body that should close the sheet once they've run use
 // <SheetAction> (or useCloseSheet()).
-export default function Sheet({ title, onClose, onDone, doneLabel = "Done", doneDisabled = false, cancelLabel = "Cancel", headerTrailing, children, className = "" }) {
+// `onBack` swaps Cancel for "‹ Back", for sheets with more than one step.
+export default function Sheet({ title, onClose, onDone, onBack, doneLabel = "Done", doneDisabled = false, cancelLabel = "Cancel", headerTrailing, children, className = "" }) {
   const [shown, setShown] = useState(false);
   const sheetRef = useRef(null);
   const closing = useRef(false);
@@ -93,7 +95,9 @@ export default function Sheet({ title, onClose, onDone, doneLabel = "Done", done
           <div className="sheet-grabber" aria-hidden="true" />
           <div className="sheet-header">
             <div className="sheet-header-leading">
-              {showCancel && <button type="button" className="nav-btn" onClick={close}>{cancelLabel}</button>}
+              {onBack ? (
+                <button type="button" className="nav-btn nav-back" onClick={onBack}><ChevronLeft size={24} strokeWidth={2.4} aria-hidden="true" />Back</button>
+              ) : showCancel && <button type="button" className="nav-btn" onClick={close}>{cancelLabel}</button>}
             </div>
             <h2 className="sheet-title" id={titleId}>{title}</h2>
             <div className="sheet-header-trailing">

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
-import { Image as ImageIcon, Plus } from "lucide-react";
+import { FileUp, Image as ImageIcon, Plus } from "lucide-react";
 import PageHeader from "../components/PageHeader";
 import ExpenseEditorSheet from "../components/ExpenseEditorSheet";
 import Sheet from "../components/ui/Sheet";
@@ -69,7 +69,7 @@ function normalizeManualRow(row) {
 
 const AXIS_TICK = { fontSize: 11, fill: "var(--label-2)", fontFamily: "var(--font)" };
 
-export default function ExpensesPage({ headerActions }) {
+export default function ExpensesPage() {
   const h = useHouseholdContext();
   const { debtBills, fixed, paidByMonth, userId, userName, sandboxActive } = h;
   const [rows, setRows] = useState(null); // null = loading
@@ -223,7 +223,7 @@ export default function ExpensesPage({ headerActions }) {
         title="Expenses"
         actions={(
           <>
-            {headerActions}
+            <button type="button" className="nav-btn" onClick={() => h.openImport("expenses")} aria-label="Import from Numbers" title="Import from Numbers"><FileUp size={22} /></button>
             <button type="button" className="nav-btn" aria-label="Log expense" title="Log expense" onClick={() => { if (!guardSandbox()) setEditing("new"); }}>
               <Plus size={24} />
             </button>

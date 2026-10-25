@@ -1,4 +1,4 @@
-import { ArrowUpDown, Bell, FlaskConical, NotebookPen } from "lucide-react";
+import { ArrowUpDown, Bell, FileUp, FlaskConical, NotebookPen } from "lucide-react";
 import PageHeader from "../components/PageHeader";
 import { ListButton, ListRow, ListSection } from "../components/ui/List";
 import Switch from "../components/ui/Switch";
@@ -9,7 +9,7 @@ import { useHouseholdContext } from "../state/HouseholdContext";
 // iOS caps the tab bar at five, so on phones everything past the first four
 // sections lands here, along with the tools and settings that used to sit
 // in the header.
-export default function MorePage({ toolRows }) {
+export default function MorePage() {
   const h = useHouseholdContext();
   return (
     <>
@@ -33,7 +33,7 @@ export default function MorePage({ toolRows }) {
         )}
 
         <ListSection header="Tools">
-          {toolRows}
+          <ListRow icon={<FileUp size={17} />} iconColor="var(--green)" title="Import from Numbers" onClick={() => h.openImport("debts")} />
           <ListRow icon={<NotebookPen size={17} />} iconColor="var(--yellow-icon)" title="Shared Notes" detail={h.notes.notes.length || null} onClick={h.openNotes} />
           <ListRow icon={<ArrowUpDown size={17} />} iconColor="var(--gray)" title="Reorder Tabs" onClick={h.openTabOrder} />
         </ListSection>

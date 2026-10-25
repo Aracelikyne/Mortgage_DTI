@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Lock, Plus, Zap } from "lucide-react";
+import { FileUp, Lock, Plus, Zap } from "lucide-react";
 import PageHeader from "../components/PageHeader";
 import DebtEditorSheet from "../components/DebtEditorSheet";
 import Sheet, { SheetAction } from "../components/ui/Sheet";
@@ -11,7 +11,7 @@ import { useHouseholdContext } from "../state/HouseholdContext";
 
 // Debts as list rows grouped by payoff tier — name, today's balance,
 // monthly payment and APR at a glance — each opening an edit sheet.
-export default function DebtsPage({ headerActions }) {
+export default function DebtsPage() {
   const h = useHouseholdContext();
   const [editing, setEditing] = useState(null); // a debt, or "new"
   const [viewingArchived, setViewingArchived] = useState(null);
@@ -54,7 +54,7 @@ export default function DebtsPage({ headerActions }) {
         title="Debts"
         actions={(
           <>
-            {headerActions}
+            <button type="button" className="nav-btn" onClick={() => h.openImport("debts")} aria-label="Import from Numbers" title="Import from Numbers"><FileUp size={22} /></button>
             <button type="button" className="nav-btn" onClick={() => setEditing("new")} aria-label="Add debt" title="Add debt"><Plus size={24} /></button>
           </>
         )}
