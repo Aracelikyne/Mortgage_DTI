@@ -4,7 +4,7 @@ import {
 } from "recharts";
 import {
   Home, KeyRound, Lock, Plus, Trash2, ChevronDown, ChevronUp, ChevronLeft, ChevronRight,
-  Wallet, TrendingDown, Sparkles, PiggyBank, Calendar, LogOut, CheckCircle2, Circle, Pencil, Clock, Zap, FlaskConical,
+  Wallet, TrendingDown, Sparkles, PiggyBank, Calendar, LogOut, CheckCircle2, Pencil, Clock, Zap, FlaskConical,
   LayoutDashboard, Receipt, ListChecks, Activity, GripVertical, ShoppingCart, ArrowUpDown, Undo2
 } from "lucide-react";
 
@@ -14,7 +14,9 @@ import { newId, repairDuplicateIds } from "./utils/ids";
 import { sameData } from "./utils/sameData";
 import { persistIdRepair, rememberIdRepair, readIdRepairNotice, dismissIdRepairNotice } from "./lib/idRepair";
 import IdRepairBanner from "./components/IdRepairBanner";
-import { buildPaycheckPlan, suggestExtraAllocation, addExtraPayments, removeExtraBatch, latestExtraBatch, isExtraPayment, money, monthLabel, monthLabelFull, pct, simulatePayoff, fmtDate, monthKeyOf, getPaymentRecord, addPaymentRecord, removePaymentRecord, updatePaymentRecord, clearPaymentRecord, isoDate, isPaymentSettled, computeAllRunningBalances, isUnderwater, willNeverGetExtra } from "./utils/finance";
+import { buildPaycheckPlan, suggestExtraAllocation, addExtraPayments, removeExtraBatch, latestExtraBatch, money, monthLabel, monthLabelFull, pct, simulatePayoff, fmtDate, monthKeyOf, addPaymentRecord, removePaymentRecord, isoDate, computeAllRunningBalances, isUnderwater, willNeverGetExtra } from "./utils/finance";
+import MonthlyPlan from "./components/MonthlyPlan";
+import ThisMonthCard from "./components/ThisMonthCard";
 import AddDebtModal from "./components/AddDebtModal";
 import AddFixedModal from "./components/AddFixedModal";
 import AutopaySettingsModal from "./components/AutopaySettingsModal";
@@ -633,7 +635,10 @@ function BillTracker({ saved, userId, userName, initialLastEditedBy, initialPend
     [debts, runningBalances]
   );
 
-  const debtBills = debtsWithRunningBalance.filter((d) => d.isDebt !== false);
+  const debtBills = useMemo(() => debtsWithRunningBalance.filter((d) => d.isDebt !== false), [debtsWithRunningBalance]);
+  // Everything that's due each month — what the Monthly Plan and the
+  // Dashboard's "This month" card track.
+  const monthlyBills = useMemo(() => [...debtBills, ...fixed], [debtBills, fixed]);
   const totalDebtMonthly = debtBills.reduce((s, d) => s + Number(d.monthly || 0), 0);
   const totalDebtBalance = debtBills.reduce((s, d) => s + Number(d.balance || 0), 0);
   const rentMonthly = fixed.find((f) => f.type === "Rent/Mortgage")?.monthly || 0;
@@ -1118,6 +1123,58 @@ function BillTracker({ saved, userId, userName, initialLastEditedBy, initialPend
           padding: 12px 14px; margin-top: 10px; line-height: 1.5;
         }
 
+        /* --- monthly plan: paid vs still to pay --- */
+        .status-tiles { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+        @media (max-width: 760px) { .status-tiles { grid-template-columns: repeat(2, 1fr); } }
+        .segmented { display: inline-flex; gap: 2px; padding: 2px; border: 1px solid var(--line); border-radius: 8px; background: #E4DCC5; }
+        .segmented-option {
+          border: none; background: transparent; padding: 6px 14px; border-radius: 6px; cursor: pointer;
+          font-family: 'Inter', sans-serif; font-weight: 600; font-size: 12.5px; color: var(--ink-soft);
+        }
+        .segmented-option.active { background: var(--card); color: var(--ink); box-shadow: 0 1px 2px rgba(0,0,0,0.12); }
+        .monthly-filter { margin: 16px 0 6px; }
+        .status-group { margin-top: 14px; }
+        .status-group-head { display: flex; justify-content: space-between; align-items: baseline; font-weight: 700; font-size: 13px; margin: 0 4px 6px; }
+        .status-group-count { color: var(--ink-soft); font-family: 'IBM Plex Mono', monospace; font-weight: 500; }
+        .bill-list { padding: 0; }
+        .bill-row { border-bottom: 1px solid #EFE9D9; }
+        .bill-row:last-child { border-bottom: none; }
+        .bill-row-main { display: flex; align-items: center; gap: 4px; padding: 0 10px 0 12px; }
+        .mark-paid { display: inline-flex; align-items: center; justify-content: center; width: 32px; height: 32px; border: none; background: transparent; cursor: pointer; padding: 0; flex-shrink: 0; }
+        .bill-row-toggle {
+          flex: 1; min-width: 0; display: flex; align-items: center; gap: 10px; padding: 11px 4px; border: none; background: transparent;
+          cursor: pointer; text-align: left; font-family: 'Inter', sans-serif; color: var(--ink);
+        }
+        .bill-row-emoji { font-size: 15px; width: 20px; text-align: center; flex-shrink: 0; }
+        .bill-row-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+        .bill-row-name { font-weight: 600; font-size: 14px; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+        .bill-row-note { font-size: 12px; color: var(--ink-soft); }
+        .bill-row-amount { text-align: right; font-weight: 600; font-size: 13.5px; display: flex; flex-direction: column; align-items: flex-end; white-space: nowrap; }
+        .bill-row-amount .of { font-weight: 400; color: var(--ink-soft); }
+        .bill-row-extra { font-size: 11px; color: var(--pine-deep); }
+        .bill-row-chevron { color: var(--ink-soft); transition: transform .15s; flex-shrink: 0; }
+        .bill-row.expanded .bill-row-chevron { transform: rotate(180deg); }
+        .bill-row.is-paid .bill-row-name { color: var(--ink-soft); }
+        .payment-details { padding: 4px 14px 12px 50px; display: flex; flex-direction: column; gap: 6px; }
+        .payment-line { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+        .payment-add { padding-top: 8px; border-top: 1px dashed var(--line); }
+        .payment-input { border: 1px solid var(--line); border-radius: 3px; padding: 4px 6px; font-size: 12px; font-family: 'Inter', sans-serif; background: #fff; }
+        .payment-bank { flex: 1; min-width: 90px; }
+        .payment-cleared { display: flex; align-items: center; gap: 4px; font-size: 12px; color: var(--ink-soft); }
+
+        /* --- dashboard: this month --- */
+        .this-month { margin-top: 16px; }
+        .link-button { border: none; background: transparent; color: var(--brass-deep); font-weight: 600; font-size: 13px; cursor: pointer; display: inline-flex; align-items: center; gap: 2px; font-family: 'Inter', sans-serif; }
+        .this-month-totals { display: flex; justify-content: space-between; margin-top: 8px; font-size: 13px; color: var(--ink-soft); }
+        .this-month-totals strong { color: var(--ink); }
+        .status-counts { display: flex; flex-wrap: wrap; gap: 6px 14px; margin-top: 10px; font-size: 12.5px; }
+        .status-count.zero { opacity: 0.55; }
+        .next-up { margin-top: 14px; border-top: 1px dashed var(--line); padding-top: 10px; display: flex; flex-direction: column; }
+        .next-up-title { font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--ink-soft); font-weight: 600; margin-bottom: 4px; }
+        .next-up-row { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px solid #EFE9D9; }
+        .next-up-row:last-child { border-bottom: none; }
+        .next-up-amount { font-weight: 600; font-size: 13px; }
+
         .paycheck-row { display: flex; gap: 12px; overflow-x: auto; padding-bottom: 6px; margin-top: 4px; }
         .paycheck-card {
           flex: 0 0 220px; background: #fff; border: 1px solid var(--line); border-radius: 4px; padding: 12px 14px;
@@ -1351,6 +1408,13 @@ function BillTracker({ saved, userId, userName, initialLastEditedBy, initialPend
             <div className="wall-meta ctc-mono">{money(totalDebtBalance)} remaining</div>
           </div>
         </div>
+
+        <ThisMonthCard
+          bills={monthlyBills}
+          paidByMonth={paidByMonth}
+          setPaidByMonth={setPaidByMonth}
+          onSeeAll={() => setPage("monthly")}
+        />
 
         {/* ---- stat cards ---- */}
         <div className="stat-grid">
@@ -2081,8 +2145,7 @@ function BillTracker({ saved, userId, userName, initialLastEditedBy, initialPend
 
         {page === "monthly" && (
           <MonthlyPlan
-            debtBills={debtBills}
-            fixed={fixed}
+            bills={monthlyBills}
             paidByMonth={paidByMonth}
             setPaidByMonth={setPaidByMonth}
           />
@@ -2151,12 +2214,6 @@ function SuggestionLens({ title, metric, lens, hint, empty, onApply }) {
   );
 }
 
-function ordinal(n) {
-  const s = ["th", "st", "nd", "rd"];
-  const v = n % 100;
-  return n + (s[(v - 20) % 10] || s[v] || s[0]);
-}
-
 // A feed of who did what, most recent first — the "who made what edits"
 // record that the shared household row alone can't show (that row only
 // ever has the very latest name attached to it, not a history).
@@ -2203,215 +2260,6 @@ function ActivityFeed({ refreshKey }) {
             ))}
           </div>
         )}
-      </div>
-    </div>
-  );
-}
-
-function MonthlyPlan({ debtBills, fixed, paidByMonth, setPaidByMonth }) {
-  const [viewDate, setViewDate] = useState(() => new Date());
-  const monthKey = monthKeyOf(viewDate);
-  const monthEntry = paidByMonth[monthKey] || {};
-
-  const items = [
-    ...debtBills.map((d) => ({ id: d.id, name: d.name, monthly: d.monthly, dueDay: d.dueDay })),
-    ...fixed.map((f) => ({ id: f.id, name: f.name, monthly: f.monthly, dueDay: f.dueDay })),
-  ].sort((a, b) => {
-    if (a.dueDay == null && b.dueDay == null) return a.name.localeCompare(b.name);
-    if (a.dueDay == null) return 1;
-    if (b.dueDay == null) return -1;
-    return a.dueDay - b.dueDay;
-  });
-
-  const totalMonthly = items.reduce((s, it) => s + Number(it.monthly || 0), 0);
-  const paidTotal = items.reduce((s, it) => {
-    const rec = getPaymentRecord(monthEntry, it);
-    return s + Math.min(rec.amountPaid, Number(it.monthly || 0));
-  }, 0);
-  const remaining = totalMonthly - paidTotal;
-  const progressPct = totalMonthly > 0 ? (paidTotal / totalMonthly) * 100 : 0;
-  const fullyPaidCount = items.filter((it) => {
-    const rec = getPaymentRecord(monthEntry, it);
-    return Number(it.monthly || 0) > 0 && rec.settledAmount >= Number(it.monthly || 0);
-  }).length;
-
-  function addPayment(item, amount, date) {
-    if (!(amount > 0)) return;
-    setPaidByMonth((prev) => addPaymentRecord(prev, monthKey, item.id, { amount, date: date || isoDate(new Date()) }));
-  }
-
-  function removePayment(item, paymentId) {
-    setPaidByMonth((prev) => removePaymentRecord(prev, monthKey, item.id, paymentId));
-  }
-
-  function updatePayment(item, paymentId, patch) {
-    setPaidByMonth((prev) => updatePaymentRecord(prev, monthKey, item.id, paymentId, patch));
-  }
-
-  function toggleFullyPaid(item) {
-    const rec = getPaymentRecord(monthEntry, item);
-    const monthly = Number(item.monthly || 0);
-    if (rec.settledAmount >= monthly && monthly > 0) {
-      // Already fully settled — unmark it (its extra payments, if any, stay).
-      setPaidByMonth((prev) => clearPaymentRecord(prev, monthKey, item.id));
-    } else if (rec.amountPaid >= monthly && monthly > 0) {
-      // Already fully scheduled, just not settled yet — settle the
-      // existing payment(s) instead of logging a second, redundant one.
-      setPaidByMonth((prev) => {
-        let next = prev;
-        for (const p of rec.regularPayments) {
-          if (!isPaymentSettled(p)) next = updatePaymentRecord(next, monthKey, item.id, p.id, { cleared: true });
-        }
-        return next;
-      });
-    } else {
-      addPayment(item, monthly - rec.amountPaid);
-    }
-  }
-
-  function shiftMonth(delta) {
-    setViewDate((d) => new Date(d.getFullYear(), d.getMonth() + delta, 1));
-  }
-
-  const monthLabelText = viewDate.toLocaleDateString("en-US", { month: "long", year: "numeric" });
-  const isCurrentMonth = monthKeyOf(new Date()) === monthKey;
-
-  return (
-    <div style={{ marginTop: 4 }}>
-      <div className="ctc-section-head" style={{ marginTop: 18 }}>
-        <div className="ctc-h2"><Calendar size={18} /> Monthly plan</div>
-        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-          <button className="btn-ghost btn-sm" style={{ border: "1px solid var(--line)" }} onClick={() => shiftMonth(-1)}><ChevronLeft size={15} /></button>
-          <span className="ctc-mono" style={{ minWidth: 130, textAlign: "center", fontWeight: 600 }}>{monthLabelText}</span>
-          <button className="btn-ghost btn-sm" style={{ border: "1px solid var(--line)" }} onClick={() => shiftMonth(1)}><ChevronRight size={15} /></button>
-          {!isCurrentMonth && (
-            <button className="btn btn-ghost btn-sm" onClick={() => setViewDate(new Date())}>Today</button>
-          )}
-        </div>
-      </div>
-
-      <div className="card" style={{ marginBottom: 16 }}>
-        <div className="wall-head" style={{ marginBottom: 8 }}>
-          <span className="wall-title">{fullyPaidCount} of {items.length} fully paid</span>
-          <span className="wall-meta ctc-mono">{money(remaining)} remaining of {money(totalMonthly)}</span>
-        </div>
-        <div className="wall-track">
-          <div className="wall-seg" style={{ width: `${progressPct}%`, background: "var(--pine)" }} />
-        </div>
-      </div>
-
-      {items.length === 0 && (
-        <div className="card"><div className="ctc-hint">No debts or fixed expenses yet — add some from the Debts or Fixed Expenses tabs.</div></div>
-      )}
-
-      {items.map((it) => (
-        <BillPaymentCard
-          key={it.id}
-          item={it}
-          rec={getPaymentRecord(monthEntry, it)}
-          onToggleFull={() => toggleFullyPaid(it)}
-          onAddPayment={(amount, date) => addPayment(it, amount, date)}
-          onRemovePayment={(paymentId) => removePayment(it, paymentId)}
-          onUpdatePayment={(paymentId, patch) => updatePayment(it, paymentId, patch)}
-        />
-      ))}
-    </div>
-  );
-}
-
-function BillPaymentCard({ item, rec, onToggleFull, onAddPayment, onRemovePayment, onUpdatePayment }) {
-  const [draftAmount, setDraftAmount] = useState("");
-  const [draftDate, setDraftDate] = useState(() => isoDate(new Date()));
-
-  const monthly = Number(item.monthly || 0);
-  const fullyPaid = monthly > 0 && rec.settledAmount >= monthly;
-  const partial = rec.settledAmount > 0 && !fullyPaid;
-  const pendingAmount = Math.max(0, rec.amountPaid - rec.settledAmount);
-  // Beyond the minimum: regular payments over it, plus anything logged as
-  // extra from the Extra money card.
-  const extraTotal = Math.max(0, rec.amountPaid - monthly) + rec.extraPaid;
-
-  let icon;
-  if (fullyPaid) icon = <CheckCircle2 size={20} color="var(--pine-deep)" />;
-  else if (partial) icon = <Circle size={20} color="var(--brass-deep)" fill="var(--brass-deep)" fillOpacity={0.25} />;
-  else if (pendingAmount > 0.005) icon = <Clock size={20} color="var(--brass-deep)" />;
-  else icon = <Circle size={20} color="var(--line)" />;
-
-  function submitDraft() {
-    const amt = Number(draftAmount);
-    if (amt > 0) {
-      onAddPayment(amt, draftDate);
-      setDraftAmount("");
-    }
-  }
-
-  return (
-    <div className="card" style={{ marginBottom: 8, opacity: fullyPaid ? 0.7 : 1 }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-        <button className="btn-ghost btn-sm" style={{ border: "none", padding: 0 }} onClick={onToggleFull} title={fullyPaid ? "Mark unpaid" : "Mark fully paid"}>
-          {icon}
-        </button>
-        <div style={{ flex: 1 }}>
-          <div style={{ fontWeight: 600, fontSize: 14, textDecoration: fullyPaid ? "line-through" : "none" }}>{item.name}</div>
-          {item.dueDay != null && <div className="ctc-hint">Due the {ordinal(item.dueDay)}</div>}
-          {partial && <div className="ctc-hint" style={{ color: "var(--brass-deep)", fontWeight: 600 }}>Partial — {money(Math.max(0, monthly - rec.settledAmount))} remaining</div>}
-          {pendingAmount > 0.005 && <div className="ctc-hint" style={{ color: "var(--brass-deep)" }}>Scheduled — {money(pendingAmount)} not yet settled</div>}
-        </div>
-        <div style={{ textAlign: "right" }}>
-          <div className="ctc-mono" style={{ fontWeight: 600 }}>{money(Math.min(rec.amountPaid, monthly))} <span style={{ fontWeight: 400, color: "var(--ink-soft)" }}>of {money(monthly)}</span></div>
-          {extraTotal > 0.005 && (
-            <div className="ctc-hint" style={{ marginTop: 2, color: "var(--pine-deep)", fontWeight: 600 }}>+{money(extraTotal)} extra</div>
-          )}
-        </div>
-      </div>
-
-      {rec.payments.length > 0 && (
-        <div style={{ marginTop: 10, paddingTop: 10, borderTop: "1px dashed var(--line)", display: "flex", flexDirection: "column", gap: 6 }}>
-          {rec.payments.map((p) => (
-            <div key={p.id} style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-              <span className="ctc-mono" style={{ fontWeight: 600, minWidth: 55 }}>{money(p.amount)}</span>
-              {isExtraPayment(p) && (
-                <span className="split-badge" title="Logged from the Extra money card — doesn't count toward this bill's regular payment">Extra</span>
-              )}
-              <input
-                type="date"
-                value={p.date || ""}
-                onChange={(e) => onUpdatePayment(p.id, { date: e.target.value || null })}
-                style={{ border: "1px solid var(--line)", borderRadius: 3, padding: "3px 5px", fontSize: 11.5, fontFamily: "Inter, sans-serif" }}
-              />
-              <label style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 11.5, color: "var(--ink-soft)" }}>
-                <input type="checkbox" checked={!!p.cleared} onChange={(e) => onUpdatePayment(p.id, { cleared: e.target.checked })} />
-                Cleared
-              </label>
-              <input
-                value={p.bank || ""}
-                onChange={(e) => onUpdatePayment(p.id, { bank: e.target.value })}
-                placeholder="Bank/account"
-                style={{ flex: 1, minWidth: 90, border: "1px solid var(--line)", borderRadius: 3, padding: "4px 6px", fontSize: 11.5, fontFamily: "Inter, sans-serif" }}
-              />
-              <button className="btn-ghost btn-sm" style={{ border: "none", padding: 2 }} title="Remove this payment" onClick={() => onRemovePayment(p.id)}>
-                <Trash2 size={12} color="#A5473A" />
-              </button>
-            </div>
-          ))}
-        </div>
-      )}
-
-      <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap", marginTop: 10, paddingTop: 10, borderTop: "1px dashed var(--line)" }}>
-        <input
-          type="number"
-          placeholder="Amount"
-          value={draftAmount}
-          onChange={(e) => setDraftAmount(e.target.value)}
-          style={{ width: 80, border: "1px solid var(--line)", borderRadius: 3, padding: "4px 6px", fontSize: 12.5 }}
-        />
-        <input
-          type="date"
-          value={draftDate}
-          onChange={(e) => setDraftDate(e.target.value)}
-          style={{ border: "1px solid var(--line)", borderRadius: 3, padding: "4px 6px", fontSize: 12.5, fontFamily: "Inter, sans-serif" }}
-        />
-        <button className="btn btn-ghost btn-sm" onClick={submitDraft}><Plus size={13} /> Add payment</button>
       </div>
     </div>
   );

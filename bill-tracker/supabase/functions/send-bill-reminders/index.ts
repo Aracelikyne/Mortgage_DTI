@@ -51,7 +51,7 @@ function amountPaidFor(monthEntry: Record<string, unknown>, billId: string) {
   return raw.payments.reduce((s, p) => s + (p.kind === "extra" ? 0 : Number(p.amount) || 0), 0);
 }
 
-type Bill = { id: string; name: string; monthly?: number; dueDay?: number | null; graceDays?: number };
+type Bill = { id: string; name: string; monthly?: number; dueDay?: number | null; graceDays?: number; autopay?: boolean };
 
 // Checks both this month's and next month's occurrence of the due date —
 // a bill due on the 1st needs its "3 days ahead" reminder to fire in the
@@ -72,7 +72,9 @@ function billsDueForReminder(bills: Bill[], paidByMonth: Record<string, Record<s
       const monthEntry = paidByMonth[monthKeyOf(dueDate)] || {};
       if (amountPaidFor(monthEntry, bill.id) >= monthly) continue;
       if (daysUntil === REMINDER_DAYS_AHEAD) { due.push({ bill, kind: "upcoming" }); break; }
-      if (daysUntil === -(grace + 1)) { due.push({ bill, kind: "overdue" }); break; }
+      // Autopay debits itself on its date, with nothing logged by hand — the
+      // app never shows it as past due, so it never gets an overdue push.
+      if (daysUntil === -(grace + 1) && !bill.autopay) { due.push({ bill, kind: "overdue" }); break; }
     }
   }
   return due;
