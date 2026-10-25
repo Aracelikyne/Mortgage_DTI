@@ -1,10 +1,12 @@
 // src/data/constants.js
 
+// Colors are CSS variables (iOS system colors, see styles/app.css) so they
+// adapt to dark mode.
 export const TIERS = {
-  1: { label: "Quick Wins", color: "#B8863F" },
-  2: { label: "Core Payoff", color: "#8C6A9C" },
-  3: { label: "Large Loans", color: "#A5473A" },
-  4: { label: "Deprioritized", color: "#8A8272" },
+  1: { label: "Quick Wins", color: "var(--tier-1)" },
+  2: { label: "Core Payoff", color: "var(--tier-2)" },
+  3: { label: "Large Loans", color: "var(--tier-3)" },
+  4: { label: "Deprioritized", color: "var(--tier-4)" },
 };
 
 // The category dropdown on each debt row: the four payoff tiers, plus the

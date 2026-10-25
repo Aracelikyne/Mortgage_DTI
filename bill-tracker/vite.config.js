@@ -29,8 +29,10 @@ export default defineConfig({
         start_url: '/Mortgage_DTI/',
         scope: '/Mortgage_DTI/',
         display: 'standalone',
-        background_color: '#ECE6D6',
-        theme_color: '#ECE6D6',
+        // iOS systemGroupedBackground (light) — the manifest has no
+        // dark-mode variant; index.html's theme-color metas cover dark.
+        background_color: '#F2F2F7',
+        theme_color: '#F2F2F7',
         icons: [
           { src: 'icon-192.png', sizes: '192x192', type: 'image/png', purpose: 'any' },
           { src: 'icon-512.png', sizes: '512x512', type: 'image/png', purpose: 'any' },

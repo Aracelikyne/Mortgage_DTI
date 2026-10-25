@@ -1,5 +1,4 @@
-import { useEffect, useState } from "react";
-import { Bell, BellOff } from "lucide-react";
+import { useCallback, useEffect, useState } from "react";
 import { supabase } from "../lib/supabaseClient";
 
 // The public half of the VAPID key pair the send-bill-reminders Edge
@@ -15,10 +14,10 @@ function urlBase64ToUint8Array(base64String) {
   return Uint8Array.from([...raw].map((c) => c.charCodeAt(0)));
 }
 
-// A bell toggle for bill-due-date push notifications. Each browser/device
-// that turns this on gets its own subscription row — so switching it on
-// here only affects notifications on this device, not the other person's.
-export default function NotificationSettings({ userId, userName }) {
+// Bill-due-date push notifications. Each browser/device that turns this on
+// gets its own subscription row — so switching it on here only affects
+// notifications on this device, not the other person's.
+export function usePushReminders({ userId, userName }) {
   const [supported] = useState(() => "serviceWorker" in navigator && "PushManager" in window);
   const [subscribed, setSubscribed] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -31,7 +30,7 @@ export default function NotificationSettings({ userId, userName }) {
       .catch(() => {});
   }, [supported]);
 
-  async function enable() {
+  const enable = useCallback(async () => {
     setBusy(true);
     try {
       const permission = await Notification.requestPermission();
@@ -58,9 +57,9 @@ export default function NotificationSettings({ userId, userName }) {
       console.error(err);
     }
     setBusy(false);
-  }
+  }, [userId, userName]);
 
-  async function disable() {
+  const disable = useCallback(async () => {
     setBusy(true);
     try {
       const reg = await navigator.serviceWorker.ready;
@@ -74,19 +73,7 @@ export default function NotificationSettings({ userId, userName }) {
       console.error(err);
     }
     setBusy(false);
-  }
+  }, []);
 
-  if (!supported) return null;
-
-  return (
-    <button
-      className="btn btn-ghost btn-sm"
-      onClick={subscribed ? disable : enable}
-      disabled={busy}
-      title={subscribed ? "Bill reminders on for this device — tap to turn off" : "Get a push reminder before bills are due"}
-    >
-      {subscribed ? <Bell size={13} color="var(--brass-deep)" fill="var(--brass-deep)" /> : <BellOff size={13} />}
-      {subscribed ? "Reminders on" : "Get reminders"}
-    </button>
-  );
+  return { supported, subscribed, busy, setEnabled: (on) => (on ? enable() : disable()) };
 }

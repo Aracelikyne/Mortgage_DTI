@@ -104,30 +104,56 @@ export function useLiveFollow({ userId, userName, page, onLeaderUpdate }) {
     setLeaderState(null);
   }, [userId, userName]);
 
-  // Only worth broadcasting our own cursor when someone is actually
+  // Only worth broadcasting our own position when someone is actually
   // watching — otherwise it's wasted traffic (and exposure) for nobody.
+  // Sent on mouse moves, and also on scrolls and page switches: a phone has
+  // no mouse, so without those a follower would never see a phone leader
+  // change page.
+  const lastPointerRef = useRef(null); // null until the mouse has actually moved
+  const sendPosition = useCallback((force = false) => {
+    const now = Date.now();
+    if (!force && now - lastSentRef.current < CURSOR_THROTTLE_MS) return;
+    lastSentRef.current = now;
+    const doc = document.documentElement;
+    const maxScroll = Math.max(1, doc.scrollHeight - doc.clientHeight);
+    channelRef.current?.send({
+      type: "broadcast",
+      event: "cursor",
+      payload: {
+        userId, userName, page: pageRef.current,
+        x: lastPointerRef.current?.x ?? 0.5,
+        y: lastPointerRef.current?.y ?? 0.5,
+        hasPointer: !!lastPointerRef.current,
+        scrollFrac: doc.scrollTop / maxScroll,
+      },
+    });
+  }, [userId, userName]);
+
+  const watched = followedByNames.length > 0;
   useEffect(() => {
-    if (followedByNames.length === 0) return;
+    if (!watched) return;
+    // Pointer events, mouse only: browsers (iOS Safari included) fire
+    // compatibility mousemove events after a tap, which would plant a ghost
+    // cursor wherever a phone user last touched.
     function handleMove(e) {
-      const now = Date.now();
-      if (now - lastSentRef.current < CURSOR_THROTTLE_MS) return;
-      lastSentRef.current = now;
-      const doc = document.documentElement;
-      const maxScroll = Math.max(1, doc.scrollHeight - doc.clientHeight);
-      channelRef.current?.send({
-        type: "broadcast",
-        event: "cursor",
-        payload: {
-          userId, userName, page: pageRef.current,
-          x: e.clientX / window.innerWidth,
-          y: e.clientY / window.innerHeight,
-          scrollFrac: doc.scrollTop / maxScroll,
-        },
-      });
+      if (e.pointerType !== "mouse") return;
+      lastPointerRef.current = { x: e.clientX / window.innerWidth, y: e.clientY / window.innerHeight };
+      sendPosition();
     }
-    window.addEventListener("mousemove", handleMove);
-    return () => window.removeEventListener("mousemove", handleMove);
-  }, [followedByNames.length, userId, userName]);
+    const handleScroll = () => sendPosition();
+    window.addEventListener("pointermove", handleMove);
+    window.addEventListener("scroll", handleScroll, { passive: true });
+    return () => {
+      window.removeEventListener("pointermove", handleMove);
+      window.removeEventListener("scroll", handleScroll);
+    };
+  }, [watched, sendPosition]);
+
+  // A page switch goes out right away (and once when someone starts
+  // watching, so they land on the right page without waiting for a move).
+  useEffect(() => {
+    if (watched) sendPosition(true);
+  }, [page, watched, sendPosition]);
 
   return { onlineUsers, followingId, followingName, leaderState, followedByNames, follow, unfollow };
 }

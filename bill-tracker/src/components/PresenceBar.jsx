@@ -7,25 +7,25 @@ export default function PresenceBar({ onlineUsers, followingId, followedByNames,
   if (onlineUsers.length === 0 && followedByNames.length === 0) return null;
 
   return (
-    <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginTop: 8 }}>
+    <div className="presence">
       {onlineUsers.map((u) => (
-        <div key={u.userId} className="ctc-hint" style={{ display: "flex", alignItems: "center", gap: 6 }}>
-          <span style={{ width: 7, height: 7, borderRadius: "50%", background: "var(--pine)", display: "inline-block" }} />
+        <span key={u.userId} className="presence-pill">
+          <span className="presence-dot" aria-hidden="true" />
           {u.userName} online
           {followingId === u.userId ? (
-            <button className="btn-ghost btn-sm" style={{ border: "1px solid var(--line)" }} onClick={onUnfollow}>
-              <EyeOff size={12} /> Stop following
+            <button type="button" className="btn btn-xs btn-gray" onClick={onUnfollow}>
+              <EyeOff size={13} /> Stop following
             </button>
           ) : !disableFollow ? (
-            <button className="btn-ghost btn-sm" style={{ border: "1px solid var(--line)" }} onClick={() => onFollow(u.userId, u.userName)}>
-              <Eye size={12} /> Follow
+            <button type="button" className="btn btn-xs btn-tinted" onClick={() => onFollow(u.userId, u.userName)}>
+              <Eye size={13} /> Follow
             </button>
           ) : null}
-        </div>
+        </span>
       ))}
       {followedByNames.length > 0 && (
-        <span className="ctc-hint">
-          <Eye size={12} style={{ verticalAlign: -2 }} /> {followedByNames.map((f) => f.name).join(", ")} watching you
+        <span className="presence-pill presence-watched">
+          <Eye size={13} aria-hidden="true" /> {followedByNames.map((f) => f.name).join(", ")} watching you
         </span>
       )}
     </div>
