@@ -5,7 +5,7 @@ import {
 import {
   Home, KeyRound, Lock, Plus, Trash2, ChevronDown, ChevronUp, ChevronLeft, ChevronRight,
   Wallet, TrendingDown, Sparkles, PiggyBank, Calendar, LogOut, CheckCircle2, Circle, Pencil, Clock, Zap, FlaskConical,
-  LayoutDashboard, Receipt, ListChecks, Activity, GripVertical, ShoppingCart, ArrowUpDown
+  LayoutDashboard, Receipt, ListChecks, Activity, GripVertical, ShoppingCart, ArrowUpDown, Undo2
 } from "lucide-react";
 
 // Import your extracted logic and components
@@ -14,7 +14,7 @@ import { newId, repairDuplicateIds } from "./utils/ids";
 import { sameData } from "./utils/sameData";
 import { persistIdRepair, rememberIdRepair, readIdRepairNotice, dismissIdRepairNotice } from "./lib/idRepair";
 import IdRepairBanner from "./components/IdRepairBanner";
-import { allocateExtra, allocateMaxCashFlow, buildPaycheckPlan, fastestStrategyForBoost, minimumAdjustedDebts, money, monthLabel, monthLabelFull, pct, simulatePayoff, fmtDate, monthKeyOf, getPaymentRecord, addPaymentRecord, removePaymentRecord, updatePaymentRecord, clearPaymentRecord, isoDate, isPaymentSettled, computeAllRunningBalances, isUnderwater, willNeverGetExtra } from "./utils/finance";
+import { buildPaycheckPlan, suggestExtraAllocation, addExtraPayments, removeExtraBatch, latestExtraBatch, isExtraPayment, money, monthLabel, monthLabelFull, pct, simulatePayoff, fmtDate, monthKeyOf, getPaymentRecord, addPaymentRecord, removePaymentRecord, updatePaymentRecord, clearPaymentRecord, isoDate, isPaymentSettled, computeAllRunningBalances, isUnderwater, willNeverGetExtra } from "./utils/finance";
 import AddDebtModal from "./components/AddDebtModal";
 import AddFixedModal from "./components/AddFixedModal";
 import AutopaySettingsModal from "./components/AutopaySettingsModal";
@@ -316,7 +316,9 @@ function BillTracker({ saved, userId, userName, initialLastEditedBy, initialPend
   const [page, setPage] = useState("dashboard");
 
   const [extraAmount, setExtraAmount] = useState("");
-  const [suggestion, setSuggestion] = useState(null);
+  // Only the amount that was submitted is state — the suggestion itself is
+  // derived from current data below, so it never shows yesterday's numbers.
+  const [submittedExtra, setSubmittedExtra] = useState(null);
   const [showAddDebt, setShowAddDebt] = useState(false);
   const [showAddFixed, setShowAddFixed] = useState(false);
   const [editingAutopay, setEditingAutopay] = useState(null); // { kind: "debt" | "fixed", item }
@@ -657,6 +659,25 @@ function BillTracker({ saved, userId, userName, initialLastEditedBy, initialPend
   const dtiWithMortgageTargetLabel = sim.dtiWithMortgageTargetMonth === 0 ? "Already there" : sim.dtiWithMortgageTargetMonth !== null ? monthLabelFull(sim.dtiWithMortgageTargetMonth) : "480+ months out";
   const hasExcludedWithBalance = debtsWithRunningBalance.some((d) => d.excludeFromGoal && d.isDebt !== false && d.balance > 0);
 
+  const currentMonthKey = monthKeyOf(new Date());
+  const suggestion = useMemo(
+    () => (submittedExtra > 0
+      ? suggestExtraAllocation({
+          amount: submittedExtra,
+          debts: debtsWithRunningBalance,
+          monthEntry: paidByMonth[currentMonthKey] || {},
+          recurringExtra: Number(recurringExtra) || 0,
+          boosts,
+        })
+      : null),
+    [submittedExtra, debtsWithRunningBalance, paidByMonth, currentMonthKey, recurringExtra, boosts]
+  );
+  const lastExtraBatch = useMemo(() => latestExtraBatch(paidByMonth), [paidByMonth]);
+  const billNameById = useMemo(
+    () => new Map([...paidOffDebts, ...debts, ...fixed].map((b) => [b.id, b.name])),
+    [paidOffDebts, debts, fixed]
+  );
+
   const paycheckPlan = useMemo(() => {
     const billsForPlan = [
       ...debts.filter((d) => d.isDebt !== false).map((d) => ({ id: d.id, name: d.name, monthly: d.monthly, dueDay: d.dueDay, graceDays: d.graceDays, splitFriendly: d.splitFriendly, autopay: d.autopay, autopayFrequency: d.autopayFrequency, autopayAnchor: d.autopayAnchor, autopayAmount: d.autopayAmount })),
@@ -684,7 +705,7 @@ function BillTracker({ saved, userId, userName, initialLastEditedBy, initialPend
   // payment it came from, so toggling it off removes only that payment.
   function togglePaidFromPaycheckItem(item) {
     if (item.autopay) return; // autopay settles itself — nothing to toggle manually
-    const mKey = monthKeyOf(item.dueDate);
+    const mKey = item.monthKey || monthKeyOf(item.dueDate);
     if (item.paid && item.paymentId) {
       setPaidByMonth((prev) => removePaymentRecord(prev, mKey, item.billId, item.paymentId));
     } else if (!item.paid) {
@@ -832,55 +853,38 @@ function BillTracker({ saved, userId, userName, initialLastEditedBy, initialPend
     setBoosts((prev) => [...prev, boost]);
   }
 
-  function buildRows(applied, sourceDebts) {
-    return sourceDebts
-      .filter((d) => applied[d.id])
-      .map((d) => {
-        const newBalance = Math.max(0, d.balance - applied[d.id]);
-        return { id: d.id, name: d.name, applied: applied[d.id], newBalance, paidOff: newBalance <= 0 };
-      });
+  function changeExtraAmount(value) {
+    setExtraAmount(value);
+    setSubmittedExtra(null); // results were for the old amount
   }
-
-  const STRATEGY_LABEL = { tiered: "your tiers", snowball: "snowball", avalanche: "avalanche", maxcashflow: "the cash-flow combo" };
-
   function runSuggestion() {
     const amt = Number(extraAmount);
-    if (!amt || amt <= 0) return;
-
-    // knock out this month's already-budgeted minimums first — only what's left needs extra dollars
-    const adjusted = minimumAdjustedDebts(debts);
-
-    const cash = allocateMaxCashFlow(adjusted, amt);
-    const interest = allocateExtra(adjusted, amt, "avalanche");
-    const fastestPick = fastestStrategyForBoost(debts, amt, Number(recurringExtra) || 0, boosts);
-    const fastestApplied = fastestPick.strategy === "maxcashflow" ? cash.applied : allocateExtra(adjusted, amt, fastestPick.strategy).applied;
-    const fastestSpent = Object.values(fastestApplied).reduce((s, v) => s + v, 0);
-
-    setSuggestion({
-      amt,
-      cashFlow: { rows: buildRows(cash.applied, adjusted), leftover: cash.leftover, freedMonthly: cash.freedMonthly },
-      interestCost: { rows: buildRows(interest.applied, adjusted), leftover: interest.leftover },
-      fastest: {
-        rows: buildRows(fastestApplied, adjusted),
-        leftover: Math.max(0, amt - fastestSpent),
-        strategyLabel: STRATEGY_LABEL[fastestPick.strategy],
-        freedomMonth: fastestPick.freedomMonth,
-      },
-    });
+    if (amt > 0) setSubmittedExtra(amt);
+  }
+  function clearSuggestion() {
+    setExtraAmount("");
+    setSubmittedExtra(null);
   }
 
-
+  // "Apply this" logs real payments — one extra payment per bill, dated
+  // today, tagged as one batch — instead of rewriting each debt's stored
+  // balance. That way the money shows up on the Monthly Plan, the Paycheck
+  // Plan and Expenses like any other payment, moves the running balance
+  // the same way (interest included), never counts toward a bill's regular
+  // minimum, and can be undone in one go.
   function applySuggestionLens(lensKey) {
-    if (!suggestion || !suggestion[lensKey]) return;
-    const rows = suggestion[lensKey].rows;
-    setDebts((prev) =>
-      prev.map((d) => {
-        const row = rows.find((r) => r.id === d.id);
-        return row ? { ...d, balance: row.newBalance } : d;
-      })
-    );
-    setSuggestion(null);
-    setExtraAmount("");
+    const lens = suggestion?.[lensKey];
+    if (!lens || lens.rows.length === 0) return;
+    const now = new Date();
+    const batch = { batchId: newId(), date: isoDate(now), appliedAt: now.toISOString() };
+    const allocations = lens.rows.map((r) => ({ billId: r.id, amount: r.applied }));
+    setPaidByMonth((prev) => addExtraPayments(prev, monthKeyOf(now), allocations, batch));
+    clearSuggestion();
+  }
+  function undoLastExtraBatch() {
+    if (!lastExtraBatch) return;
+    const { batchId } = lastExtraBatch;
+    setPaidByMonth((prev) => removeExtraBatch(prev, batchId));
   }
 
   const dtiBand = dti === null ? null : dti <= 36 ? "good" : dti <= 43 ? "watch" : "over";
@@ -1507,7 +1511,7 @@ function BillTracker({ saved, userId, userName, initialLastEditedBy, initialPend
             <div className="field-row" style={{ alignItems: "end" }}>
               <div className="field">
                 <label>Amount you have available</label>
-                <input type="number" placeholder="e.g. 500" value={extraAmount} onChange={(e) => setExtraAmount(e.target.value)} />
+                <input type="number" placeholder="e.g. 500" value={extraAmount} onChange={(e) => changeExtraAmount(e.target.value)} />
               </div>
               <div className="field">
                 <label>Ongoing strategy (for the timeline below)</label>
@@ -1517,62 +1521,58 @@ function BillTracker({ saved, userId, userName, initialLastEditedBy, initialPend
                   <button className={`pill ${strategy === "avalanche" ? "active" : ""}`} onClick={() => setStrategy("avalanche")}>Avalanche</button>
                 </div>
               </div>
-              <div className="field" style={{ flex: "0 0 auto" }}>
+              <div className="field" style={{ flex: "0 0 auto", display: "flex", gap: 8 }}>
                 <button className="btn btn-primary" onClick={runSuggestion}><TrendingDown size={15} /> Suggest allocation</button>
+                {(extraAmount !== "" || suggestion) && (
+                  <button className="btn btn-ghost" onClick={clearSuggestion}>Clear</button>
+                )}
               </div>
             </div>
             <div className="ctc-hint" style={{ marginTop: 10 }}>
               The pills above set your ongoing strategy for the debt-free projection. "Suggest allocation" answers a different
-              question — where this specific amount does the most good, three ways at once. Each bill's regular minimum
-              payment is treated as already spoken for — only the amount left over after that minimum counts as needing
-              extra dollars, and any partial payment carries forward to next month.
+              question — where this specific amount does the most good, three ways at once, using each debt's balance as of
+              today. Whatever's still unpaid of this month's minimum is treated as already spoken for, so only what's owed
+              beyond it counts as needing extra dollars. "Apply this" logs the money as extra payments dated today — they show
+              on the Monthly Plan (where each can be deleted), the Paycheck Plan and Expenses, and never count as a bill's
+              regular payment.
             </div>
+
+            {lastExtraBatch && (
+              <div className="protected-note" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
+                <span>
+                  Last applied: <strong className="ctc-mono">{money(lastExtraBatch.total)}</strong> extra to{" "}
+                  {lastExtraBatch.items.map((it) => billNameById.get(it.billId) || "a removed bill").join(", ")}
+                  {lastExtraBatch.date ? ` on ${fmtDate(new Date(lastExtraBatch.date + "T00:00:00"))}` : ""}.
+                </span>
+                <button className="btn btn-ghost btn-sm" onClick={undoLastExtraBatch}><Undo2 size={13} /> Undo</button>
+              </div>
+            )}
 
             {suggestion && (
               <div className="suggestion-box">
                 <div className="lens-grid">
-                  <div className="lens-card">
-                    <div className="lens-title">Frees the most monthly payment</div>
-                    <div className="lens-metric">+{money(suggestion.cashFlow.freedMonthly)}/mo freed</div>
-                    {suggestion.cashFlow.rows.map((r) => (
-                      <div className="sugg-row ctc-mono" key={r.id}>
-                        <span>{r.name}</span>
-                        <span>+{money(r.applied)} {r.paidOff ? "→ paid off ✓" : `→ ${money(r.newBalance)} left, continues next month`}</span>
-                      </div>
-                    ))}
-                    {suggestion.cashFlow.rows.length === 0 && <div className="ctc-hint">Not enough to fully clear any one bill.</div>}
-                    <button className="btn btn-ghost btn-sm" style={{ marginTop: 10 }} onClick={() => applySuggestionLens("cashFlow")}>Apply this</button>
-                  </div>
-                  <div className="lens-card">
-                    <div className="lens-title">Cuts the most interest cost</div>
-                    <div className="lens-metric">avalanche order</div>
-                    {suggestion.interestCost.rows.map((r) => (
-                      <div className="sugg-row ctc-mono" key={r.id}>
-                        <span>{r.name}</span>
-                        <span>+{money(r.applied)} {r.paidOff ? "→ paid off ✓" : `→ ${money(r.newBalance)} left, continues next month`}</span>
-                      </div>
-                    ))}
-                    <div className="ctc-hint" style={{ marginTop: 6 }}>
-                      {debts.some((d) => d.apr) ? "Ranked by the APRs you've entered." : "No APRs entered yet, so this matches your tiers for now — add interest rates for this to diverge."}
-                    </div>
-                    <button className="btn btn-ghost btn-sm" style={{ marginTop: 10 }} onClick={() => applySuggestionLens("interestCost")}>Apply this</button>
-                  </div>
-                  <div className="lens-card">
-                    <div className="lens-title">Gets you debt-free fastest</div>
-                    <div className="lens-metric">
-                      {suggestion.fastest.freedomMonth !== null ? monthLabelFull(suggestion.fastest.freedomMonth) : "480+ months out"}
-                    </div>
-                    {suggestion.fastest.rows.map((r) => (
-                      <div className="sugg-row ctc-mono" key={r.id}>
-                        <span>{r.name}</span>
-                        <span>+{money(r.applied)} {r.paidOff ? "→ paid off ✓" : `→ ${money(r.newBalance)} left, continues next month`}</span>
-                      </div>
-                    ))}
-                    <div className="ctc-hint" style={{ marginTop: 6 }}>Wins by simulating your recurring extra forward under {suggestion.fastest.strategyLabel}.</div>
-                    <button className="btn btn-ghost btn-sm" style={{ marginTop: 10 }} onClick={() => applySuggestionLens("fastest")}>Apply this</button>
-                  </div>
+                  <SuggestionLens
+                    title="Frees the most monthly payment"
+                    metric={`+${money(suggestion.cashFlow.freedMonthly)}/mo freed`}
+                    lens={suggestion.cashFlow}
+                    empty="Not enough to fully clear any one bill."
+                    onApply={() => applySuggestionLens("cashFlow")}
+                  />
+                  <SuggestionLens
+                    title="Cuts the most interest cost"
+                    metric="avalanche order"
+                    lens={suggestion.interestCost}
+                    hint={debts.some((d) => d.apr) ? "Ranked by the APRs you've entered." : "No APRs entered yet, so this matches your tiers for now — add interest rates for this to diverge."}
+                    onApply={() => applySuggestionLens("interestCost")}
+                  />
+                  <SuggestionLens
+                    title="Gets you debt-free fastest"
+                    metric={suggestion.fastest.freedomMonth !== null ? monthLabelFull(suggestion.fastest.freedomMonth) : "480+ months out"}
+                    lens={suggestion.fastest}
+                    hint={`Wins by simulating your recurring extra forward under ${suggestion.fastest.strategyLabel}.`}
+                    onApply={() => applySuggestionLens("fastest")}
+                  />
                 </div>
-                <button className="btn btn-ghost btn-sm" style={{ marginTop: 12 }} onClick={() => setSuggestion(null)}>Dismiss</button>
               </div>
             )}
 
@@ -2103,7 +2103,8 @@ function BillTracker({ saved, userId, userName, initialLastEditedBy, initialPend
         </div>
 
         <div className="footnote">
-          Balances shown as "—" haven't been entered yet. Interest accrues monthly only where you've set an APR — otherwise
+          Balances shown as "—" haven't been entered yet. Interest only accrues where you've set an APR — daily between the
+          payments you log, and monthly in the payoff projection — otherwise
           minimum payments are treated as pure principal reduction. DTI reference bands (36% / 43%) are common general
           guidelines, not a specific lender's requirement — actual qualifying DTI varies by loan program and lender. This
           tool isn't financial or lending advice. Your data is saved to your account automatically as you go, and only visible when you're signed in.
@@ -2120,6 +2121,32 @@ function BillTracker({ saved, userId, userName, initialLastEditedBy, initialPend
           onSave={(patch) => (editingAutopay.kind === "debt" ? updateDebt : updateFixed)(editingAutopay.item.id, patch)}
         />
       )}
+    </div>
+  );
+}
+
+// One of the Extra money card's three answers. `lens.leftover` is whatever
+// the amount couldn't be put toward — only non-zero when it's more than
+// every targetable balance (after this month's minimums) combined.
+function SuggestionLens({ title, metric, lens, hint, empty, onApply }) {
+  return (
+    <div className="lens-card">
+      <div className="lens-title">{title}</div>
+      <div className="lens-metric">{metric}</div>
+      {lens.rows.map((r) => (
+        <div className="sugg-row ctc-mono" key={r.id}>
+          <span>{r.name}</span>
+          <span>+{money(r.applied)} {r.paidOff ? "→ paid off ✓" : `→ ${money(r.newBalance)} left, continues next month`}</span>
+        </div>
+      ))}
+      {lens.rows.length === 0 && empty && <div className="ctc-hint">{empty}</div>}
+      {lens.leftover >= 0.5 && (
+        <div className="ctc-hint" style={{ marginTop: 6, color: "var(--pine-deep)", fontWeight: 600 }}>
+          {money(lens.leftover)} left over — more than every balance this can go toward.
+        </div>
+      )}
+      {hint && <div className="ctc-hint" style={{ marginTop: 6 }}>{hint}</div>}
+      <button className="btn btn-ghost btn-sm" style={{ marginTop: 10 }} disabled={lens.rows.length === 0} onClick={onApply}>Apply this</button>
     </div>
   );
 }
@@ -2225,14 +2252,14 @@ function MonthlyPlan({ debtBills, fixed, paidByMonth, setPaidByMonth }) {
     const rec = getPaymentRecord(monthEntry, item);
     const monthly = Number(item.monthly || 0);
     if (rec.settledAmount >= monthly && monthly > 0) {
-      // Already fully settled — unmark it entirely.
+      // Already fully settled — unmark it (its extra payments, if any, stay).
       setPaidByMonth((prev) => clearPaymentRecord(prev, monthKey, item.id));
     } else if (rec.amountPaid >= monthly && monthly > 0) {
       // Already fully scheduled, just not settled yet — settle the
       // existing payment(s) instead of logging a second, redundant one.
       setPaidByMonth((prev) => {
         let next = prev;
-        for (const p of rec.payments) {
+        for (const p of rec.regularPayments) {
           if (!isPaymentSettled(p)) next = updatePaymentRecord(next, monthKey, item.id, p.id, { cleared: true });
         }
         return next;
@@ -2300,6 +2327,9 @@ function BillPaymentCard({ item, rec, onToggleFull, onAddPayment, onRemovePaymen
   const fullyPaid = monthly > 0 && rec.settledAmount >= monthly;
   const partial = rec.settledAmount > 0 && !fullyPaid;
   const pendingAmount = Math.max(0, rec.amountPaid - rec.settledAmount);
+  // Beyond the minimum: regular payments over it, plus anything logged as
+  // extra from the Extra money card.
+  const extraTotal = Math.max(0, rec.amountPaid - monthly) + rec.extraPaid;
 
   let icon;
   if (fullyPaid) icon = <CheckCircle2 size={20} color="var(--pine-deep)" />;
@@ -2329,8 +2359,8 @@ function BillPaymentCard({ item, rec, onToggleFull, onAddPayment, onRemovePaymen
         </div>
         <div style={{ textAlign: "right" }}>
           <div className="ctc-mono" style={{ fontWeight: 600 }}>{money(Math.min(rec.amountPaid, monthly))} <span style={{ fontWeight: 400, color: "var(--ink-soft)" }}>of {money(monthly)}</span></div>
-          {rec.amountPaid > monthly + 0.005 && (
-            <div className="ctc-hint" style={{ marginTop: 2, color: "var(--pine-deep)", fontWeight: 600 }}>+{money(rec.amountPaid - monthly)} extra</div>
+          {extraTotal > 0.005 && (
+            <div className="ctc-hint" style={{ marginTop: 2, color: "var(--pine-deep)", fontWeight: 600 }}>+{money(extraTotal)} extra</div>
           )}
         </div>
       </div>
@@ -2340,6 +2370,9 @@ function BillPaymentCard({ item, rec, onToggleFull, onAddPayment, onRemovePaymen
           {rec.payments.map((p) => (
             <div key={p.id} style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
               <span className="ctc-mono" style={{ fontWeight: 600, minWidth: 55 }}>{money(p.amount)}</span>
+              {isExtraPayment(p) && (
+                <span className="split-badge" title="Logged from the Extra money card — doesn't count toward this bill's regular payment">Extra</span>
+              )}
               <input
                 type="date"
                 value={p.date || ""}

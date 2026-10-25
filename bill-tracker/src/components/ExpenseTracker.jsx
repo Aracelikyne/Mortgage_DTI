@@ -324,7 +324,7 @@ export default function ExpenseTracker({ debts, fixed, paidByMonth, userId, user
             <div style={{ flex: 1, minWidth: 140 }}>
               <div style={{ fontSize: 13.5, fontWeight: 600 }}>{e.note || e.category}</div>
               <div className="ctc-hint">
-                {e.category}{e.source === "bill" ? " · bill payment" : ""} · {e.date ? fmtDate(new Date(e.date + "T00:00:00")) : "—"}
+                {e.category}{e.source === "bill" ? (e.extra ? " · extra payment" : " · bill payment") : ""} · {e.date ? fmtDate(new Date(e.date + "T00:00:00")) : "—"}
               </div>
             </div>
             <div className="ctc-mono" style={{ fontWeight: 600 }}>{money(e.amount)}</div>

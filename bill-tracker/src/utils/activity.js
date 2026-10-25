@@ -49,11 +49,14 @@ function diffPaidByMonth(prev, next, billNames, changes) {
       const nextPayments = normalizePayments(nextMonth[billId]);
       if (JSON.stringify(prevPayments) === JSON.stringify(nextPayments)) continue;
       const name = billNames.get(billId) || billId;
+      const kind = (p) => (p?.kind === "extra" ? "extra payment" : "payment");
       if (nextPayments.length > prevPayments.length) {
         const added = nextPayments[nextPayments.length - 1];
-        changes.push(`Logged a ${money(added.amount)} payment on "${name}"`);
+        changes.push(`Logged a ${money(added.amount)} ${kind(added)} on "${name}"`);
       } else if (nextPayments.length < prevPayments.length) {
-        changes.push(`Removed a payment on "${name}"`);
+        const nextIds = new Set(nextPayments.map((p) => p.id));
+        const removed = prevPayments.find((p) => !nextIds.has(p.id));
+        changes.push(`Removed a${removed?.kind === "extra" ? "n" : ""} ${kind(removed)} on "${name}"`);
       } else {
         changes.push(`Updated a payment on "${name}"`);
       }

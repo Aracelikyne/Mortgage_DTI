@@ -36,68 +36,97 @@ export function allocateExtra(debts, amount, strategy) {
   return { applied, leftover: Math.max(0, remaining) };
 }
 
+// 0/1 knapsack over whole dollars: value = monthly payment freed, weight =
+// the balance rounded UP (so a chosen set never costs more than it looks).
+// Returns the chosen debts.
+function knapsackChoose(targetable, budget) {
+  const dp = new Float64Array(budget + 1);
+  const choice = targetable.map(() => new Uint8Array(budget + 1));
+  for (let i = 0; i < targetable.length; i++) {
+    const { weight, monthly } = targetable[i];
+    if (weight > budget) continue;
+    for (let b = budget; b >= weight; b--) {
+      const withItem = dp[b - weight] + monthly;
+      if (withItem > dp[b]) {
+        dp[b] = withItem;
+        choice[i][b] = 1;
+      }
+    }
+  }
+  // backtrack from the best budget point (the largest spend among ties)
+  let bestB = 0;
+  for (let b = 0; b <= budget; b++) if (dp[b] >= dp[bestB]) bestB = b;
+  const chosen = [];
+  let b = bestB;
+  for (let i = targetable.length - 1; i >= 0; i--) {
+    if (choice[i][b]) {
+      chosen.push(targetable[i]);
+      b -= targetable[i].weight;
+    }
+  }
+  return chosen;
+}
+
 // Knapsack: pick the combination of bills fully payable within `amount` that frees
 // the most monthly payment. Only a FULLY paid-off bill frees its monthly payment —
 // a partial payment doesn't lower the minimum due next month.
 export function allocateMaxCashFlow(debts, amount) {
   const targetable = debts
     .filter((d) => d.isDebt !== false && !d.protected && !d.excludeFromGoal && d.balance > 0)
-    .map((d) => ({ ...d, cost: Math.round(d.balance) }));
-  const budget = Math.min(Math.floor(amount), 200000);
+    .map((d) => {
+      const balance = Math.round(Number(d.balance) * 100) / 100;
+      // Weight rounds up so a $100.40 balance never "fits" in $100, but the
+      // amount applied is the exact balance — rounding that too used to
+      // leave 40¢ behind and report the bill as "continues next month".
+      return { ...d, balance, monthly: Number(d.monthly) || 0, weight: Math.ceil(balance) };
+    });
 
-  // 0/1 knapsack, value = monthly payment freed, weight = balance (cost to fully clear)
-  const dp = new Array(budget + 1).fill(0);
-  const choice = targetable.map(() => new Array(budget + 1).fill(false));
-  for (let i = 0; i < targetable.length; i++) {
-    const { cost, monthly } = targetable[i];
-    if (cost > budget) continue;
-    for (let b = budget; b >= cost; b--) {
-      const withItem = dp[b - cost] + monthly;
-      if (withItem > dp[b]) {
-        dp[b] = withItem;
-        choice[i][b] = true;
-      }
+  // Whole-dollar weights against the amount rounded down can miss a set the
+  // cents would exactly cover ($100.40 clearing a $100.40 balance), so also
+  // try the rounded-up budget and keep it when the exact total still fits.
+  let chosen = [];
+  let chosenValue = -1;
+  for (const budget of new Set([Math.floor(amount), Math.ceil(amount)])) {
+    const pick = knapsackChoose(targetable, Math.min(Math.max(0, budget), 200000));
+    const exactCost = pick.reduce((s, d) => s + d.balance, 0);
+    const value = pick.reduce((s, d) => s + d.monthly, 0);
+    if (exactCost <= amount + 0.005 && value > chosenValue) {
+      chosen = pick;
+      chosenValue = value;
     }
   }
-  // backtrack to find which bills were chosen at the best budget point
-  let bestB = 0;
-  for (let b = 0; b <= budget; b++) if (dp[b] >= dp[bestB]) bestB = b;
-  const chosenIds = [];
-  let b = bestB;
-  for (let i = targetable.length - 1; i >= 0; i--) {
-    if (choice[i][b]) {
-      chosenIds.push(targetable[i].id);
-      b -= targetable[i].cost;
-    }
-  }
+
   const applied = {};
-  let spent = 0;
-  for (const id of chosenIds) {
-    const d = targetable.find((t) => t.id === id);
-    applied[id] = d.cost;
-    spent += d.cost;
+  let leftover = amount;
+  for (const d of chosen) {
+    applied[d.id] = d.balance;
+    leftover -= d.balance;
   }
-  let leftover = amount - spent;
   // roll any leftover onto the next-smallest remaining balance (doesn't free cash flow yet, but reduces principal)
   const remaining = targetable.filter((d) => !applied[d.id]).sort((a, b2) => a.balance - b2.balance);
   for (const d of remaining) {
-    if (leftover <= 0) break;
+    if (leftover <= 0.005) break;
     const pay = Math.min(leftover, d.balance);
-    applied[d.id] = (applied[d.id] || 0) + pay;
+    applied[d.id] = pay;
     leftover -= pay;
   }
-  const freedMonthly = chosenIds.reduce((s, id) => s + targetable.find((t) => t.id === id).monthly, 0);
+  // Freed = every bill this clears completely, including one the leftover
+  // happened to finish off.
+  const freedMonthly = targetable.reduce((s, d) => s + (applied[d.id] >= d.balance - 0.005 ? d.monthly : 0), 0);
   return { applied, leftover: Math.max(0, leftover), freedMonthly };
 }
 
 // This month's minimum payments are already budgeted separately from "extra" money —
-// so before allocating extra, first knock each balance down by its own minimum.
+// so before allocating extra, first knock each balance down by whatever's still
+// unpaid of its own minimum this month. A minimum already logged as paid has
+// already lowered the running balance; subtracting it again would count it twice.
 // Only the amount still owed after that counts as needing extra dollars.
-export function minimumAdjustedDebts(debts) {
+export function minimumAdjustedDebts(debts, monthEntry = {}) {
   return debts.map((d) => {
     if (d.isDebt === false || d.balance === null || d.balance === undefined || d.balance <= 0) return d;
-    const min = Math.min(Number(d.monthly || 0), d.balance);
-    return { ...d, balance: Math.max(0, d.balance - min) };
+    const paidTowardMinimum = getPaymentRecord(monthEntry, d).amountPaid;
+    const unpaidMinimum = Math.max(0, Number(d.monthly || 0) - paidTowardMinimum);
+    return { ...d, balance: Math.max(0, d.balance - Math.min(unpaidMinimum, d.balance)) };
   });
 }
 
@@ -112,10 +141,15 @@ export function monthlyInterest(balance, apr) {
 // are already baked into the stored figure and would double-count.
 export const BALANCE_ANCHOR_DATE = "2026-08-22";
 
+const DAY_MS = 86400000;
+
 // Walks a debt's payment history since the anchor date, splitting each
-// payment into interest (accrued on the balance at that point) and
-// principal, in order, so the running balance reflects what's actually
-// been paid down rather than the static number originally typed in.
+// payment into interest and principal, in order, so the running balance
+// reflects what's actually been paid down rather than the static number
+// originally typed in. Interest accrues daily — APR/365 for each day since
+// the previous payment (or since the anchor, for the first one) — so a
+// bill paid in three parts accrues the same interest as one paid in full,
+// instead of being charged a full month of interest per payment.
 // Missing APR: the whole payment goes to principal, and the result is
 // flagged as an estimate. A payment smaller than the interest it's meant
 // to cover doesn't get clamped — the shortfall grows the balance instead,
@@ -137,11 +171,16 @@ export function computeRunningBalance(debt, allPayments) {
   let balance = Number(debt.balance);
   let principalPaid = 0;
   let growing = false;
+  let accruedThrough = anchor;
 
   for (const p of relevant) {
     const amount = Number(p.amount) || 0;
     if (amount <= 0) continue;
-    const interest = hasApr ? monthlyInterest(balance, Number(debt.apr)) : 0;
+    const paidOn = new Date(p.date + "T00:00:00");
+    // Rounded: a span crossing a daylight-saving change is 23 or 25 hours short of whole days.
+    const days = Math.max(0, Math.round((paidOn - accruedThrough) / DAY_MS));
+    accruedThrough = paidOn;
+    const interest = hasApr ? balance * (Number(debt.apr) / 100 / 365) * days : 0;
     const principal = amount - interest;
     if (principal < 0) growing = true;
     balance = Math.max(0, balance - principal);
@@ -212,6 +251,7 @@ export function derivedBillExpenses(debts, fixed, paidByMonth) {
           category: bill.category || "Other",
           note: bill.name,
           source: "bill",
+          extra: isExtraPayment(p),
         });
       }
     }
@@ -334,17 +374,68 @@ export function simulatePayoff(debts, recurringExtra, boosts, strategy, opts = {
   };
 }
 
+// `debts` should carry running balances (what's actually owed today), not
+// the stored anchor balances.
 export function fastestStrategyForBoost(debts, boostAmount, recurringExtra, existingBoosts) {
   const candidates = ["tiered", "snowball", "avalanche", "maxcashflow"];
   let best = null;
+  // Compared as a number: a strategy with no debt-free date in the window is
+  // Infinity, not null — `fm < null` is always false, so a first strategy
+  // with no date used to beat everything after it.
+  let bestMonth = Infinity;
   for (const strat of candidates) {
     const result = strat === "maxcashflow"
       ? simulatePayoffWithFirstMoveOverride(debts, recurringExtra, existingBoosts, boostAmount)
       : simulatePayoff(debts, recurringExtra, [...existingBoosts, { month: 1, amount: boostAmount }], strat);
     const fm = result.freedomMonth ?? Infinity;
-    if (!best || fm < best.freedomMonth) best = { strategy: strat, freedomMonth: result.freedomMonth };
+    if (!best || fm < bestMonth) {
+      best = { strategy: strat, freedomMonth: result.freedomMonth };
+      bestMonth = fm;
+    }
   }
   return best;
+}
+
+const SUGGESTION_STRATEGY_LABEL = { tiered: "your tiers", snowball: "snowball", avalanche: "avalanche", maxcashflow: "the cash-flow combo" };
+
+function suggestionRows(applied, sourceDebts) {
+  return sourceDebts
+    .filter((d) => applied[d.id] > 0.005)
+    .map((d) => {
+      const amount = Math.round(applied[d.id] * 100) / 100;
+      const newBalance = Math.max(0, Math.round((d.balance - applied[d.id]) * 100) / 100);
+      return { id: d.id, name: d.name, applied: amount, newBalance, paidOff: newBalance <= 0.005 };
+    });
+}
+
+// "Extra money this month": where one specific amount does the most good,
+// three ways at once. A pure function of current data — the UI recomputes
+// it whenever balances or payments change, so it can't go stale the way a
+// stored suggestion did. `debts` must carry running balances (what's owed
+// today); `monthEntry` is this month's paidByMonth entry, so a minimum
+// that's already been paid isn't subtracted a second time.
+export function suggestExtraAllocation({ amount, debts, monthEntry = {}, recurringExtra = 0, boosts = [] }) {
+  const adjusted = minimumAdjustedDebts(debts, monthEntry);
+  const cash = allocateMaxCashFlow(adjusted, amount);
+  const interest = allocateExtra(adjusted, amount, "avalanche");
+  const fastestPick = fastestStrategyForBoost(debts, amount, recurringExtra, boosts);
+  const fastestApplied = fastestPick.strategy === "maxcashflow" ? cash.applied : allocateExtra(adjusted, amount, fastestPick.strategy).applied;
+  const fastestSpent = Object.values(fastestApplied).reduce((s, v) => s + v, 0);
+  const targetableTotal = adjusted
+    .filter((d) => d.isDebt !== false && !d.protected && !d.excludeFromGoal && d.balance > 0)
+    .reduce((s, d) => s + d.balance, 0);
+  return {
+    amount,
+    targetableTotal,
+    cashFlow: { rows: suggestionRows(cash.applied, adjusted), leftover: cash.leftover, freedMonthly: cash.freedMonthly },
+    interestCost: { rows: suggestionRows(interest.applied, adjusted), leftover: interest.leftover },
+    fastest: {
+      rows: suggestionRows(fastestApplied, adjusted),
+      leftover: Math.max(0, amount - fastestSpent),
+      strategyLabel: SUGGESTION_STRATEGY_LABEL[fastestPick.strategy],
+      freedomMonth: fastestPick.freedomMonth,
+    },
+  };
 }
 
 export function simulatePayoffWithFirstMoveOverride(debts, recurringExtra, existingBoosts, boostAmount, capMonths = 480) {
@@ -403,8 +494,11 @@ export function fmtDate(d) {
   return d.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
 }
 
+// The local calendar date as YYYY-MM-DD. Not toISOString(): that's UTC,
+// which is already "tomorrow" on a US evening — so a payment marked paid
+// at 8pm used to be dated tomorrow and sit as "scheduled" overnight.
 export function isoDate(d) {
-  return d.toISOString().slice(0, 10);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 
 export function monthKeyOf(date) {
@@ -436,24 +530,46 @@ export function isPaymentSettled(payment, today = new Date()) {
 // piece by piece instead of one all-or-nothing total. `amountPaid` is
 // derived as the sum of every payment (what's committed); `settledAmount`
 // is the sum of only the payments that have actually happened.
+//
+// "Extra" payments (kind: "extra", logged from the Extra money card) are
+// real money against the bill — they're in `payments`, so they move the
+// running balance and show up everywhere payments do — but they're kept out
+// of amountPaid/settledAmount and reported separately as `extraPaid`, so
+// throwing extra money at a bill never marks its regular payment as made.
+export function isExtraPayment(p) {
+  return p?.kind === "extra";
+}
+
+function sumPayments(list, onlySettled = false) {
+  return list.reduce((s, p) => s + (!onlySettled || isPaymentSettled(p) ? Number(p.amount) || 0 : 0), 0);
+}
+
 export function getPaymentRecord(monthEntry, item) {
   const raw = (monthEntry || {})[item.id];
   if (raw && typeof raw === "object" && Array.isArray(raw.payments)) {
-    const amountPaid = raw.payments.reduce((s, p) => s + (Number(p.amount) || 0), 0);
-    const settledAmount = raw.payments.reduce((s, p) => s + (isPaymentSettled(p) ? Number(p.amount) || 0 : 0), 0);
-    return { payments: raw.payments, amountPaid, settledAmount };
+    const regularPayments = raw.payments.filter((p) => !isExtraPayment(p));
+    const extraPayments = raw.payments.filter(isExtraPayment);
+    return {
+      payments: raw.payments,
+      regularPayments,
+      extraPayments,
+      amountPaid: sumPayments(regularPayments),
+      settledAmount: sumPayments(regularPayments, true),
+      extraPaid: sumPayments(extraPayments),
+    };
   }
   // Older saved shapes, from before multiple partial payments existed.
   if (raw && typeof raw === "object") {
     const amt = Number(raw.amountPaid) || 0;
     const payments = amt > 0.005 ? [{ id: "legacy", amount: amt, date: raw.paidDate || null, cleared: true, bank: raw.bank || "" }] : [];
-    return { payments, amountPaid: amt, settledAmount: amt };
+    return { payments, regularPayments: payments, extraPayments: [], amountPaid: amt, settledAmount: amt, extraPaid: 0 };
   }
   if (raw === true) {
     const amt = Number(item.monthly) || 0;
-    return { payments: amt > 0.005 ? [{ id: "legacy", amount: amt, date: null, cleared: true, bank: "" }] : [], amountPaid: amt, settledAmount: amt };
+    const payments = amt > 0.005 ? [{ id: "legacy", amount: amt, date: null, cleared: true, bank: "" }] : [];
+    return { payments, regularPayments: payments, extraPayments: [], amountPaid: amt, settledAmount: amt, extraPaid: 0 };
   }
-  return { payments: [], amountPaid: 0, settledAmount: 0 };
+  return { payments: [], regularPayments: [], extraPayments: [], amountPaid: 0, settledAmount: 0, extraPaid: 0 };
 }
 
 function newPaymentId() {
@@ -481,9 +597,62 @@ export function updatePaymentRecord(paidByMonth, monthKey, billId, paymentId, pa
   return { ...paidByMonth, [monthKey]: { ...entry, [billId]: { payments } } };
 }
 
+// "Mark unpaid" — clears the bill's regular payments for the month but
+// keeps any extra payments, which were never part of "paid" to begin with.
 export function clearPaymentRecord(paidByMonth, monthKey, billId) {
   const entry = paidByMonth[monthKey] || {};
-  return { ...paidByMonth, [monthKey]: { ...entry, [billId]: { payments: [] } } };
+  const { extraPayments } = getPaymentRecord(entry, { id: billId, monthly: 0 });
+  return { ...paidByMonth, [monthKey]: { ...entry, [billId]: { payments: extraPayments } } };
+}
+
+// Logs one "Apply this" from the Extra money card: one extra payment per
+// bill, all sharing a batchId so the whole batch can be undone together.
+export function addExtraPayments(paidByMonth, monthKey, allocations, { batchId, date, appliedAt }) {
+  let next = paidByMonth;
+  for (const { billId, amount } of allocations) {
+    if (!(amount > 0.005)) continue;
+    next = addPaymentRecord(next, monthKey, billId, { amount, date, kind: "extra", batchId, appliedAt });
+  }
+  return next;
+}
+
+export function removeExtraBatch(paidByMonth, batchId) {
+  const out = {};
+  for (const [monthKey, entry] of Object.entries(paidByMonth || {})) {
+    let touched = false;
+    const nextEntry = {};
+    for (const [billId, raw] of Object.entries(entry || {})) {
+      if (raw && Array.isArray(raw.payments) && raw.payments.some((p) => p.batchId === batchId)) {
+        nextEntry[billId] = { ...raw, payments: raw.payments.filter((p) => p.batchId !== batchId) };
+        touched = true;
+      } else {
+        nextEntry[billId] = raw;
+      }
+    }
+    out[monthKey] = touched ? nextEntry : entry;
+  }
+  return out;
+}
+
+// The most recently applied extra-money batch still on the books, or null —
+// what the Extra money card's Undo acts on.
+export function latestExtraBatch(paidByMonth) {
+  const batches = new Map();
+  for (const [monthKey, entry] of Object.entries(paidByMonth || {})) {
+    for (const [billId, raw] of Object.entries(entry || {})) {
+      if (!raw || !Array.isArray(raw.payments)) continue;
+      for (const p of raw.payments) {
+        if (!isExtraPayment(p) || !p.batchId) continue;
+        const batch = batches.get(p.batchId) || { batchId: p.batchId, appliedAt: p.appliedAt || p.date || "", date: p.date, total: 0, items: [] };
+        batch.total += Number(p.amount) || 0;
+        batch.items.push({ billId, monthKey, amount: Number(p.amount) || 0 });
+        batches.set(p.batchId, batch);
+      }
+    }
+  }
+  let latest = null;
+  for (const batch of batches.values()) if (!latest || batch.appliedAt > latest.appliedAt) latest = batch;
+  return latest;
 }
 
 export function advanceByFrequency(date, frequency) {
@@ -689,13 +858,19 @@ export function buildPaycheckPlan(incomeSources, bills, horizonDays = 95, paidBy
     return priorChecks.length ? priorChecks[priorChecks.length - 1] : null;
   }
 
-  function recordPaidItem(check, billId, name, amount, dueDate, deadline, paymentId, settled, autopay, extra) {
+  // `monthKey` is the paidByMonth month the payment is stored under, so
+  // un-marking it from a paycheck card removes it from the right place even
+  // if its date was later edited into another month.
+  function recordPaidItem(check, billId, name, amount, dueDate, deadline, paymentId, settled, autopay, extra, monthKey) {
     if (!check) return; // paid before any known paycheck — not this plan's to show
     check.remaining -= amount;
-    check.items.push({ billId, name, amount: Math.round(amount * 100) / 100, dueDate, deadline, split: false, paid: true, settled, autopay: !!autopay, extra: !!extra, paymentId });
+    check.items.push({ billId, name, amount: Math.round(amount * 100) / 100, dueDate, deadline, split: false, paid: true, settled, autopay: !!autopay, extra: !!extra, paymentId, monthKey });
   }
 
   const handledBillMonths = new Set();
+  // A bill on biweekly autopay has two or three instances in one month;
+  // each of that month's payments should still only land on a check once.
+  const recordedPayments = new Set();
   const instances = [];
   for (const inst of rawInstances) {
     const mKey = monthKeyOf(inst.dueDate);
@@ -715,13 +890,16 @@ export function buildPaycheckPlan(incomeSources, bills, horizonDays = 95, paidBy
     // from by its own date and reduces that check's leftover in full —
     // including anything paid beyond the bill's minimum for this cycle.
     // Extra money is still money spent; it just gets labeled "extra"
-    // instead of counting toward what's still owed.
+    // instead of counting toward what's still owed. (Payments logged as
+    // extras from the Extra money card get their own pass further down.)
     let allocated = 0;
-    for (const pmt of rec.payments) {
+    for (const pmt of rec.regularPayments) {
       const amt = Number(pmt.amount) || 0;
-      if (amt <= 0.005) continue;
+      const key = `${inst.billId}|${mKey}|${pmt.id}`;
+      if (amt <= 0.005 || recordedPayments.has(key)) continue;
+      recordedPayments.add(key);
       const isExtra = allocated >= inst.amount - 0.005;
-      recordPaidItem(sourceCheckFor(pmt.date), inst.billId, inst.name, amt, inst.dueDate, inst.deadline, pmt.id, isPaymentSettled(pmt), false, isExtra);
+      recordPaidItem(sourceCheckFor(pmt.date), inst.billId, inst.name, amt, inst.dueDate, inst.deadline, pmt.id, isPaymentSettled(pmt), false, isExtra, mKey);
       allocated += amt;
     }
     const remainingAmount = inst.amount - Math.min(rec.amountPaid, inst.amount);
@@ -742,11 +920,29 @@ export function buildPaycheckPlan(incomeSources, bills, horizonDays = 95, paidBy
   for (const bill of bills) {
     if (handledBillMonths.has(`${bill.id}|${currentMonthKey}`)) continue;
     const rec = getPaymentRecord(currentMonthEntry, { id: bill.id, monthly: bill.monthly });
-    for (const pmt of rec.payments) {
+    for (const pmt of rec.regularPayments) {
       const amt = Number(pmt.amount) || 0;
       if (amt > 0.005) {
         const paidOn = pmt.date ? new Date(pmt.date + "T00:00:00") : today;
-        recordPaidItem(sourceCheckFor(pmt.date), bill.id, bill.name, amt, paidOn, paidOn, pmt.id, isPaymentSettled(pmt));
+        recordPaidItem(sourceCheckFor(pmt.date), bill.id, bill.name, amt, paidOn, paidOn, pmt.id, isPaymentSettled(pmt), false, false, currentMonthKey);
+      }
+    }
+  }
+
+  // Extra payments (Extra money card → "Apply this") never count toward a
+  // bill's minimum, but they're still money that left a paycheck: each one
+  // shows on the check it came from, labeled extra. Every month is scanned
+  // — sourceCheckFor already drops anything older than the checks in view —
+  // so a bill on autopay, or with no due day, still shows its extras.
+  const billNames = new Map(bills.map((b) => [b.id, b.name]));
+  for (const [mKey, monthEntry] of Object.entries(paidByMonth)) {
+    for (const billId of Object.keys(monthEntry || {})) {
+      if (!billNames.has(billId)) continue;
+      for (const pmt of getPaymentRecord(monthEntry, { id: billId, monthly: 0 }).extraPayments) {
+        const amt = Number(pmt.amount) || 0;
+        if (amt <= 0.005) continue;
+        const paidOn = pmt.date ? new Date(pmt.date + "T00:00:00") : today;
+        recordPaidItem(sourceCheckFor(pmt.date), billId, billNames.get(billId), amt, paidOn, paidOn, pmt.id, isPaymentSettled(pmt), false, true, mKey);
       }
     }
   }

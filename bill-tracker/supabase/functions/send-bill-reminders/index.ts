@@ -39,14 +39,16 @@ function monthKeyOf(date: Date) {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
 }
 
-// Mirrors getPaymentRecord's settledAmount logic in src/utils/finance.js,
+// Mirrors getPaymentRecord's amountPaid logic in src/utils/finance.js,
 // trimmed to just what a reminder needs — kept self-contained here rather
 // than importing across the app/function boundary, so this function stays
-// independently deployable.
+// independently deployable. Extra payments (kind: "extra", logged from the
+// Extra money card) go toward the balance, not the bill's regular payment,
+// so they never count as the bill having been paid.
 function amountPaidFor(monthEntry: Record<string, unknown>, billId: string) {
-  const raw = monthEntry?.[billId] as { payments?: { amount?: number }[] } | undefined;
+  const raw = monthEntry?.[billId] as { payments?: { amount?: number; kind?: string }[] } | undefined;
   if (!raw || !Array.isArray(raw.payments)) return 0;
-  return raw.payments.reduce((s, p) => s + (Number(p.amount) || 0), 0);
+  return raw.payments.reduce((s, p) => s + (p.kind === "extra" ? 0 : Number(p.amount) || 0), 0);
 }
 
 type Bill = { id: string; name: string; monthly?: number; dueDay?: number | null; graceDays?: number };
