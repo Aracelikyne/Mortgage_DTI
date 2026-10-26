@@ -2,6 +2,8 @@ import { ArrowUpDown, Bell, FileUp, FlaskConical, NotebookPen } from "lucide-rea
 import PageHeader from "../components/PageHeader";
 import { ListButton, ListRow, ListSection } from "../components/ui/List";
 import Switch from "../components/ui/Switch";
+import SegmentedControl from "../components/ui/SegmentedControl";
+import { THEME_OPTIONS } from "../hooks/useTheme";
 import { syncStatusText } from "../utils/sync";
 import { SECTION_COLORS } from "../data/nav";
 import { useHouseholdContext } from "../state/HouseholdContext";
@@ -53,6 +55,12 @@ export default function MorePage() {
             <span className="row-icon" style={{ background: "var(--orange)" }}><FlaskConical size={17} /></span>
             <span className="row-body"><span className="row-title">Sandbox</span></span>
             <Switch checked={h.sandboxActive} disabled={h.spectating} onChange={(on) => (on ? h.enterSandbox() : h.exitSandbox())} label="Sandbox" />
+          </div>
+        </ListSection>
+
+        <ListSection header="Appearance" footer="System follows your phone's Light/Dark setting. Saved on this device only.">
+          <div className="row segmented-row">
+            <SegmentedControl options={THEME_OPTIONS} value={h.theme} onChange={h.setTheme} label="Appearance" />
           </div>
         </ListSection>
 

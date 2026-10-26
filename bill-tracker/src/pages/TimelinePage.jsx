@@ -2,8 +2,9 @@ import { Plus, Trash2, TriangleAlert } from "lucide-react";
 import { CartesianGrid, Line, LineChart, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import PageHeader from "../components/PageHeader";
 import Banner from "../components/ui/Banner";
-import { ListSection } from "../components/ui/List";
+import { ListRow, ListSection } from "../components/ui/List";
 import { money, monthLabel } from "../utils/finance";
+import { STRATEGY_NAME } from "../utils/metrics";
 import { useHouseholdContext } from "../state/HouseholdContext";
 
 const AXIS_TICK = { fontSize: 11, fill: "var(--label-2)", fontFamily: "var(--font)" };
@@ -42,7 +43,13 @@ export default function TimelinePage() {
 
         <section className="card chart-card">
           <div className="card-head">
-            <h2 className="card-title">Total debt over time</h2>
+            <div>
+              <h2 className="card-title">Total debt over time</h2>
+              <div className="card-subtitle">
+                Every minimum payment plus your {money(Number(h.recurringExtra) || 0)}/month extra{h.boosts.length ? " and the boosts below" : ""},
+                aimed in {STRATEGY_NAME[h.strategy] || "your tier order"}. When a debt is paid off, its payment rolls into the next one.
+              </div>
+            </div>
             {sim.freedomMonth !== null && <span className="chip chip-green">Debt-free {h.debtFreeLabel}</span>}
           </div>
           <div className="chart" style={{ height: 260 }}>
@@ -63,6 +70,17 @@ export default function TimelinePage() {
             </ResponsiveContainer>
           </div>
         </section>
+
+        {(sim.stuckGoalDebts || []).length > 0 && (
+          <ListSection header="Never paid off at this pace" footer="These keep the debt-free date past 40 years. Raise the payment, fix the APR, or put extra toward them.">
+            {sim.stuckGoalDebts.map((d) => <ListRow key={d.id} title={d.name} subtitle={d.reason} onClick={() => h.setPage("debts")} />)}
+          </ListSection>
+        )}
+        {(sim.noPayoffDebts || []).length > 0 && (
+          <ListSection header="Not in this projection" footer="No payoff entered yet, so there's nothing to project. Their monthly payments still count toward DTI.">
+            {sim.noPayoffDebts.map((name) => <ListRow key={name} title={name} subtitle="Needs info: payoff" onClick={() => h.setPage("debts")} />)}
+          </ListSection>
+        )}
 
         <ListSection
           header="One-Time Boosts"

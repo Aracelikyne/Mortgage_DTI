@@ -2,7 +2,7 @@ import { describe, it, expect, vi, afterEach } from "vitest";
 import {
   computeRunningBalance, computeAllRunningBalances, autopayDebitsSince, allocateMaxCashFlow, allocateExtra, minimumAdjustedDebts, fastestStrategyForBoost,
   getPaymentRecord, clearPaymentRecord, addExtraPayments, removeExtraBatch, latestExtraBatch,
-  suggestExtraAllocation, buildPaycheckPlan, derivedBillExpenses, isoDate,
+  suggestExtraAllocation, buildPaycheckPlan, simulatePayoff, derivedBillExpenses, isoDate,
 } from "./finance";
 
 // 36.5% APR is exactly 0.1% a day, which keeps the arithmetic readable.
@@ -269,5 +269,31 @@ describe("per-debt payoff anchors and autopay", () => {
     vi.setSystemTime(new Date(2026, 10, 20));
     const d = card({ id: "b", apr: 0, autopay: true, autopayFrequency: "biweekly", autopayAnchor: "2026-10-03", autopayAmount: 450, balanceAsOf: "2026-10-25" });
     expect(autopayDebitsSince(d, {}).map((x) => x.date)).toEqual(["2026-10-31", "2026-11-14"]);
+  });
+});
+
+describe("simulatePayoff", () => {
+  it("rolls a paid-off debt's payment into the next debt", () => {
+    const debts = [
+      { id: "a", name: "A", balance: 100, monthly: 100, apr: 0, priority: 1 },
+      { id: "b", name: "B", balance: 1000, monthly: 100, apr: 0, priority: 2 },
+    ];
+    // Without the rollover B would take 10 months on its own $100.
+    expect(simulatePayoff(debts, 0, [], "tiered").freedomMonth).toBe(6);
+  });
+
+  it("names what's keeping the date out of reach, and what has no payoff", () => {
+    const debts = [
+      { id: "a", name: "Zero", balance: 500, monthly: 0, apr: 0, priority: 1 },
+      { id: "b", name: "Underwater", balance: 10000, monthly: 50, apr: 30, priority: 2 },
+      { id: "c", name: "No payoff yet", balance: null, monthly: 75, apr: null, priority: 2 },
+    ];
+    const sim = simulatePayoff(debts, 0, [], "tiered");
+    expect(sim.freedomMonth).toBeNull();
+    expect(sim.stuckGoalDebts.map((d) => [d.name, d.reason])).toEqual([
+      ["Zero", "no monthly payment"],
+      ["Underwater", "its payment doesn't cover the interest"],
+    ]);
+    expect(sim.noPayoffDebts).toEqual(["No payoff yet"]);
   });
 });

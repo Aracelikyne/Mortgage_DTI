@@ -52,8 +52,39 @@
   --side-pad: 16px;
 }
 
+/* Dark appearance: follows the device unless the person picked Light or
+   Dark in Settings (data-theme on <html>, saved per device). */
+:root[data-theme="dark"] {
+  color-scheme: dark;
+    --blue: #0A84FF; --green: #30D158; --indigo: #5E5CE6; --orange: #FF9F0A; --pink: #FF375F;
+    --purple: #BF5AF2; --red: #FF453A; --teal: #40C8E0; --yellow: #FFD60A; --mint: #63E6E2;
+    --cyan: #64D2FF; --brown: #AC8E68;
+    --gray: #8E8E93; --gray2: #636366; --gray3: #48484A; --gray4: #3A3A3C; --gray5: #2C2C2E; --gray6: #1C1C1E;
+    --green-text: #30D158; --orange-text: #FF9F0A; --red-text: #FF453A; --blue-text: #0A84FF;
+
+    --label: #FFFFFF;
+    --label-2: rgba(235, 235, 245, 0.6);
+    --label-3: rgba(235, 235, 245, 0.3);
+    --separator: rgba(84, 84, 88, 0.65);
+    --fill: rgba(120, 120, 128, 0.36);
+    --fill-2: rgba(120, 120, 128, 0.32);
+    --fill-3: rgba(118, 118, 128, 0.24);
+    --fill-4: rgba(118, 118, 128, 0.18);
+    --grouped-bg: #000000;
+    --grouped-bg-2: #1C1C1E;
+    --sheet-bg: #1C1C1E;      /* sheets sit on the elevated palette */
+    --sheet-cell: #2C2C2E;
+    --chrome: rgba(22, 22, 24, 0.82);
+    --row-highlight: #3A3A3C;
+    --seg-selected: #636366;
+    --yellow-icon: #FFD60A;
+    --gauge-good: rgba(48, 209, 88, 0.35);
+    --gauge-watch: rgba(255, 214, 10, 0.4);
+    --gauge-over: rgba(255, 69, 58, 0.35);
+}
+:root[data-theme="light"] { color-scheme: light; }
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme="light"]) {
     --blue: #0A84FF; --green: #30D158; --indigo: #5E5CE6; --orange: #FF9F0A; --pink: #FF375F;
     --purple: #BF5AF2; --red: #FF453A; --teal: #40C8E0; --yellow: #FFD60A; --mint: #63E6E2;
     --cyan: #64D2FF; --brown: #AC8E68;
@@ -287,6 +318,7 @@ code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0
 .sidebar-label { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .sidebar-count { color: var(--label-2); font-size: 15px; }
 .sidebar-switch { cursor: default; }
+.sidebar-appearance { padding: 10px 4px 6px; }
 .sidebar-footer { margin-top: auto; padding: 18px 12px 0; font-size: 12px; line-height: 16px; color: var(--label-2); }
 
 /* ---------- inset grouped lists ---------- */
@@ -507,6 +539,14 @@ code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0
 .widget-value.small { font-size: 17px; line-height: 22px; font-weight: 600; margin-top: 4px; }
 .widget-sub { font-size: 13px; color: var(--label-2); margin-top: 1px; }
 .status-tiles { margin-bottom: 14px; }
+.metric-card { border: none; text-align: left; display: flex; flex-direction: column; cursor: pointer; color: var(--label); }
+.metric-card:active { background: var(--row-highlight); }
+.metric-card .widget-label { display: flex; align-items: flex-start; justify-content: space-between; gap: 6px; }
+.metric-info { flex-shrink: 0; color: var(--label-3); margin-top: 2px; }
+.metric-value-big { font-size: 34px; line-height: 41px; font-weight: 700; text-align: center; margin: 4px 0 20px; }
+.metric-text { font-size: 15px; line-height: 21px; display: block; }
+.section-sub { margin: -6px 4px 12px; font-size: 15px; color: var(--label-2); }
+.tone-blue { color: var(--tint); }
 
 .progress { height: 8px; border-radius: 4px; background: var(--fill-3); overflow: hidden; display: flex; }
 .progress > span { height: 100%; border-radius: 4px; transition: width 0.4s ease; }

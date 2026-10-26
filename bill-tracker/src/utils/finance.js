@@ -330,6 +330,34 @@ export function willNeverGetExtra(d) {
   return !!(d.protected || d.excludeFromGoal);
 }
 
+// One month of interest and minimum payments on every working debt.
+// Returns the minimum-payment money that's now free: every paid-off debt's
+// whole payment, plus whatever a final payment didn't need. A real snowball
+// or avalanche rolls that into the next debt, so the projection does too —
+// otherwise each payoff would quietly shrink the budget going to debt.
+function payMinimums(working) {
+  let freed = 0;
+  for (const d of working) {
+    const monthly = Number(d.monthly) || 0;
+    if (d.balance <= 0) {
+      freed += monthly;
+      continue;
+    }
+    d.balance += monthlyInterest(d.balance, d.apr);
+    const min = Math.min(monthly, d.balance);
+    d.balance -= min;
+    freed += monthly - min;
+  }
+  return freed;
+}
+
+function stuckReason(d) {
+  const monthly = Number(d.monthly) || 0;
+  if (monthly <= 0) return "no monthly payment";
+  if (monthly <= monthlyInterest(d.balance, d.apr)) return "its payment doesn't cover the interest";
+  return "not paid off within 40 years at this pace";
+}
+
 // Simulates forward month by month.
 export function simulatePayoff(debts, recurringExtra, boosts, strategy, opts = {}) {
   const capMonths = opts.capMonths || 480;
@@ -363,16 +391,10 @@ export function simulatePayoff(debts, recurringExtra, boosts, strategy, opts = {
   }
 
   for (let m = 1; m <= capMonths; m++) {
-    for (const d of working) {
-      if (d.balance <= 0) continue;
-      d.balance += monthlyInterest(d.balance, d.apr);
-      const min = Math.min(d.monthly, d.balance);
-      d.balance -= min;
-    }
-    
+    const freed = payMinimums(working);
     const boostThisMonth = boosts.filter((b) => b.month === m).reduce((s, b) => s + Number(b.amount || 0), 0);
-    const extra = recurringExtra + boostThisMonth;
-    
+    const extra = recurringExtra + boostThisMonth + freed;
+
     if (extra > 0) {
       const { applied } = allocateExtra(working, extra, strategy);
       for (const d of working) {
@@ -410,6 +432,10 @@ export function simulatePayoff(debts, recurringExtra, boosts, strategy, opts = {
 
   return {
     series, freedomMonth, fullFreedomMonth, dtiTargetMonth, dtiWithMortgageTargetMonth,
+    // Why a date never arrives: goal debts still owing at the end of the
+    // window, and debts left out because there's no payoff to project.
+    stuckGoalDebts: freedomMonth === null ? working.filter((d) => !d.excludeFromGoal && d.balance > 0).map((d) => ({ id: d.id, name: d.name, reason: stuckReason(d) })) : [],
+    noPayoffDebts: debts.filter((d) => d.isDebt !== false && (d.balance === null || d.balance === undefined)).map((d) => d.name),
     underwaterDebts: underwaterFrozen.map((d) => d.name),
     // Names are for display only — anything that needs to find "this
     // debt" in the list matches by id, since two debts can share a name.
@@ -492,20 +518,15 @@ export function simulatePayoffWithFirstMoveOverride(debts, recurringExtra, exist
   let freedomMonth = null;
 
   for (let m = 1; m <= capMonths; m++) {
-    for (const d of working) {
-      if (d.balance <= 0) continue;
-      d.balance += monthlyInterest(d.balance, d.apr);
-      const min = Math.min(d.monthly, d.balance);
-      d.balance -= min;
-    }
+    const freed = payMinimums(working);
     const boostThisMonth = existingBoosts.filter((b) => b.month === m).reduce((s, b) => s + Number(b.amount || 0), 0)
       + (m === 1 ? boostAmount : 0);
     if (boostThisMonth > 0) {
       const { applied } = m === 1 ? allocateMaxCashFlow(working, boostThisMonth) : allocateExtra(working, boostThisMonth, "tiered");
       for (const d of working) if (applied[d.id]) d.balance = Math.max(0, d.balance - applied[d.id]);
     }
-    if (recurringExtra > 0) {
-      const { applied } = allocateExtra(working, recurringExtra, "tiered");
+    if (recurringExtra + freed > 0) {
+      const { applied } = allocateExtra(working, recurringExtra + freed, "tiered");
       for (const d of working) if (applied[d.id]) d.balance = Math.max(0, d.balance - applied[d.id]);
     }
     for (const d of working) if (d.balance < 0.5) d.balance = 0;

@@ -27,6 +27,8 @@ import { useMediaQuery, WIDE_LAYOUT } from "../hooks/useMediaQuery";
 import { useStoredState } from "../hooks/useStoredState";
 import { usePushReminders } from "../hooks/usePushReminders";
 import { useNotes } from "../hooks/useNotes";
+import { THEME_OPTIONS, useTheme } from "../hooks/useTheme";
+import SegmentedControl from "./ui/SegmentedControl";
 import { syncStatusText } from "../utils/sync";
 import { supabase } from "../lib/supabaseClient";
 
@@ -67,6 +69,7 @@ export default function AppShell({ saved, userId, userName, initialLastEditedBy,
   const actions = useHouseholdActions(household, model);
   const push = usePushReminders({ userId, userName });
   const notes = useNotes({ userId, userName });
+  const [theme, setTheme] = useTheme();
   const [showNotes, setShowNotes] = useState(false);
   const [showTabOrder, setShowTabOrder] = useState(false);
   const [importTarget, setImportTarget] = useState(null); // "debts" | "fixed" | "expenses" while the import sheet is open
@@ -127,6 +130,8 @@ export default function AppShell({ saved, userId, userName, initialLastEditedBy,
     openNotes: () => setShowNotes(true),
     openTabOrder: () => setShowTabOrder(true),
     openImport: (target = "debts") => setImportTarget(target),
+    theme,
+    setTheme,
     signOut: () => supabase.auth.signOut(),
   };
 
@@ -170,6 +175,9 @@ export default function AppShell({ saved, userId, userName, initialLastEditedBy,
                   <Switch checked={household.sandboxActive} onChange={(on) => (on ? household.enterSandbox() : household.exitSandbox())} label="Sandbox" />
                 </div>
               )}
+              <div className="sidebar-appearance">
+                <SegmentedControl options={THEME_OPTIONS} value={theme} onChange={setTheme} label="Appearance" />
+              </div>
               <button type="button" className="sidebar-item destructive" onClick={value.signOut}>
                 <LogOut size={21} aria-hidden="true" /><span className="sidebar-label">Sign Out ({userName})</span>
               </button>
