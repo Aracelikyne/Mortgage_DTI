@@ -2,6 +2,7 @@ import { useState } from "react";
 import { FileUp, Plus, Zap } from "lucide-react";
 import PageHeader from "../components/PageHeader";
 import FixedEditorSheet from "../components/FixedEditorSheet";
+import BillBadges from "../components/BillBadges";
 import { ListRow, ListSection } from "../components/ui/List";
 import { money } from "../utils/finance";
 import { ordinal } from "../utils/format";
@@ -18,7 +19,7 @@ export default function FixedPage() {
         title="Fixed Expenses"
         actions={(
           <>
-            <button type="button" className="nav-btn" onClick={() => h.openImport("fixed")} aria-label="Import from Numbers" title="Import from Numbers"><FileUp size={22} /></button>
+            <button type="button" className="nav-btn" onClick={() => h.openImport("statement")} aria-label="Import from Numbers" title="Import from Numbers"><FileUp size={22} /></button>
             <button type="button" className="nav-btn" onClick={() => setEditing("new")} aria-label="Add expense" title="Add expense"><Plus size={24} /></button>
           </>
         )}
@@ -35,7 +36,7 @@ export default function FixedPage() {
             {h.fixed.map((f) => (
               <ListRow
                 key={f.id}
-                title={<>{f.name}{f.autopay && <Zap size={14} className="inline-icon tone-orange" aria-label="Autopay" />}</>}
+                title={<>{f.name}{f.autopay && <Zap size={14} className="inline-icon tone-orange" aria-label="Autopay" />}<BillBadges item={f} kind="fixed" /></>}
                 subtitle={[f.type, f.dueDay ? `due the ${ordinal(f.dueDay)}` : null, f.note || null].filter(Boolean).join(" · ")}
                 detail={<span className="num">{money(Number(f.monthly || 0))}</span>}
                 onClick={() => setEditing(f)}

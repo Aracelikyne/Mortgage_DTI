@@ -176,6 +176,17 @@ export function matchOption(value, options) {
 // ---------- columns ----------
 
 export const IMPORT_TARGETS = {
+  // Bring every bill current from a payoff list — see utils/statementSync.js.
+  statement: {
+    label: "Statement",
+    fields: [
+      { key: "name", label: "Bill", required: true, headers: ["bill", "name", "debt", "account", "creditor", "lender", "card", "description"] },
+      { key: "balance", label: "Payoff", headers: ["payoff", "payoffs", "balance", "currentbalance", "owed", "amountowed", "remaining"] },
+      { key: "monthly", label: "Monthly payment", headers: ["monthly", "payment", "monthlypayment", "min", "minimum", "minpayment", "minimumpayment", "amountdue"] },
+      { key: "apr", label: "APR %", headers: ["apr", "rate", "interest", "interestrate"] },
+      { key: "dueDay", label: "Due day", headers: ["due", "dueday", "duedate", "day"] },
+    ],
+  },
   debts: {
     label: "Debts",
     fields: [

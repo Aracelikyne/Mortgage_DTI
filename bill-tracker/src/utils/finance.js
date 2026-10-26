@@ -135,11 +135,18 @@ export function monthlyInterest(balance, apr) {
   return balance * (apr / 100 / 12);
 }
 
-// Every account's stored balance is accurate as of this date, already
+// A stored balance (payoff) is accurate as of its anchor date, already
 // reflecting every payment made through it. Only payments dated strictly
-// after this anchor reduce the running balance below — earlier payments
-// are already baked into the stored figure and would double-count.
+// after the anchor reduce the running balance below — earlier payments are
+// already baked into the stored figure and would double-count. Each debt
+// carries its own anchor (`balanceAsOf`, set whenever its payoff is
+// entered or updated); this is the fallback for balances entered before
+// per-debt anchors existed.
 export const BALANCE_ANCHOR_DATE = "2026-08-22";
+
+export function balanceAnchorOf(debt) {
+  return debt?.balanceAsOf || BALANCE_ANCHOR_DATE;
+}
 
 const DAY_MS = 86400000;
 
@@ -160,7 +167,7 @@ export function computeRunningBalance(debt, allPayments) {
     return { balance: debt.balance, principalPaid: 0, isEstimate: false, growing: false };
   }
 
-  const anchor = new Date(BALANCE_ANCHOR_DATE + "T00:00:00");
+  const anchor = new Date(balanceAnchorOf(debt) + "T00:00:00");
   const hasApr = debt.apr !== null && debt.apr !== undefined && Number(debt.apr) > 0;
 
   const relevant = allPayments
@@ -172,10 +179,12 @@ export function computeRunningBalance(debt, allPayments) {
   let principalPaid = 0;
   let growing = false;
   let accruedThrough = anchor;
+  let paymentsApplied = 0;
 
   for (const p of relevant) {
     const amount = Number(p.amount) || 0;
     if (amount <= 0) continue;
+    paymentsApplied++;
     const paidOn = new Date(p.date + "T00:00:00");
     // Rounded: a span crossing a daylight-saving change is 23 or 25 hours short of whole days.
     const days = Math.max(0, Math.round((paidOn - accruedThrough) / DAY_MS));
@@ -187,7 +196,42 @@ export function computeRunningBalance(debt, allPayments) {
     principalPaid += principal;
   }
 
-  return { balance, principalPaid, isEstimate: !hasApr, growing };
+  return { balance, principalPaid, isEstimate: !hasApr, growing, paymentsApplied, asOf: balanceAnchorOf(debt) };
+}
+
+// Autopay debits itself with nothing logged by hand, so its debits since
+// the payoff's anchor date count as payments too — otherwise an autopay
+// debt's balance would never move. A month where a regular payment was
+// logged by hand is skipped (that's the same money, recorded manually).
+export function autopayDebitsSince(debt, paidByMonth, today = new Date()) {
+  if (!debt?.autopay) return [];
+  const anchor = new Date(balanceAnchorOf(debt) + "T00:00:00");
+  const end = new Date(today);
+  end.setHours(0, 0, 0, 0);
+  const loggedIn = (date) => {
+    const rec = getPaymentRecord(paidByMonth?.[monthKeyOf(date)] || {}, debt);
+    return rec.regularPayments.some((p) => Number(p.amount) > 0);
+  };
+  const out = [];
+  if (debt.autopayFrequency === "biweekly") {
+    if (!debt.autopayAnchor) return out;
+    const amount = Number(debt.autopayAmount ?? Number(debt.monthly || 0) / 2);
+    const d = new Date(debt.autopayAnchor + "T00:00:00");
+    for (let guard = 0; d <= end && guard < 600; guard++) {
+      if (d > anchor && !loggedIn(d)) out.push({ amount, date: isoDate(d), autopay: true });
+      d.setDate(d.getDate() + 14);
+    }
+    return out;
+  }
+  if (!debt.dueDay) return out;
+  const cursor = new Date(anchor.getFullYear(), anchor.getMonth(), 1);
+  for (let guard = 0; guard < 600; guard++) {
+    const due = dueDateInMonth(Number(debt.dueDay), cursor.getFullYear(), cursor.getMonth());
+    if (due > end) break;
+    if (due > anchor && !loggedIn(due)) out.push({ amount: Number(debt.monthly || 0), date: isoDate(due), autopay: true });
+    cursor.setMonth(cursor.getMonth() + 1);
+  }
+  return out;
 }
 
 // Flattens every payment recorded anywhere in paidByMonth for one bill,
@@ -212,10 +256,10 @@ export function allPaymentsForBill(paidByMonth, billId) {
 // Computes the running balance for every debt at once, keyed by id — the
 // shared entry point the UI uses so it's only ever calculated once per
 // render instead of once per place a balance is displayed.
-export function computeAllRunningBalances(debts, paidByMonth) {
+export function computeAllRunningBalances(debts, paidByMonth, today = new Date()) {
   const result = {};
   for (const d of debts) {
-    result[d.id] = computeRunningBalance(d, allPaymentsForBill(paidByMonth, d.id));
+    result[d.id] = computeRunningBalance(d, [...allPaymentsForBill(paidByMonth, d.id), ...autopayDebitsSince(d, paidByMonth, today)]);
   }
   return result;
 }

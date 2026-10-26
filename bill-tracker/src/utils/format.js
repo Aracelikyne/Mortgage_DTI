@@ -14,3 +14,9 @@ export function asInput(v) {
 export function fromInput(v, empty = null) {
   return v === "" || v === null || v === undefined ? empty : Number(v);
 }
+
+// "2026-10-12" → "10/12/26".
+export function shortDate(iso) {
+  if (!iso) return "";
+  return new Date(iso + "T00:00:00").toLocaleDateString("en-US", { month: "numeric", day: "numeric", year: "2-digit" });
+}

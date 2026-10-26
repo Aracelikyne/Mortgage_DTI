@@ -5,8 +5,9 @@ import DebtEditorSheet from "../components/DebtEditorSheet";
 import Sheet, { SheetAction } from "../components/ui/Sheet";
 import { ListRow, ListSection } from "../components/ui/List";
 import { TIERS } from "../data/constants";
-import { fmtDate, isUnderwater, money, willNeverGetExtra } from "../utils/finance";
-import { ordinal } from "../utils/format";
+import { balanceAnchorOf, fmtDate, isUnderwater, money, willNeverGetExtra } from "../utils/finance";
+import BillBadges from "../components/BillBadges";
+import { ordinal, shortDate } from "../utils/format";
 import { useHouseholdContext } from "../state/HouseholdContext";
 
 // Debts as list rows grouped by payoff tier — name, today's balance,
@@ -34,8 +35,18 @@ export default function DebtsPage() {
     return (
       <ListRow
         key={d.id}
-        title={<>{d.name}{d.autopay && <Zap size={14} className="inline-icon tone-orange" aria-label="Autopay" />}</>}
-        subtitle={[d.type, d.dueDay ? `due the ${ordinal(d.dueDay)}` : null, growing ? "growing" : null].filter(Boolean).join(" · ")}
+        title={(
+          <>
+            {d.name}{d.autopay && <Zap size={14} className="inline-icon tone-orange" aria-label="Autopay" />}
+            <BillBadges item={d} kind="debts" />
+          </>
+        )}
+        subtitle={(
+          <>
+            {[d.type, d.dueDay ? `due the ${ordinal(d.dueDay)}` : null, growing ? "growing" : null].filter(Boolean).join(" · ")}
+            <span className="row-tracker">Payoff updated {shortDate(balanceAnchorOf(d))}{d.balanceUpdatedBy ? ` · by ${d.balanceUpdatedBy}` : ""}</span>
+          </>
+        )}
         detail={(
           <span className="row-amounts">
             <span className={`num row-amount-main ${growing ? "tone-red" : ""}`}>{hasBalance ? money(running) : "—"}</span>
@@ -54,7 +65,7 @@ export default function DebtsPage() {
         title="Debts"
         actions={(
           <>
-            <button type="button" className="nav-btn" onClick={() => h.openImport("debts")} aria-label="Import from Numbers" title="Import from Numbers"><FileUp size={22} /></button>
+            <button type="button" className="nav-btn" onClick={() => h.openImport("statement")} aria-label="Import from Numbers" title="Import from Numbers"><FileUp size={22} /></button>
             <button type="button" className="nav-btn" onClick={() => setEditing("new")} aria-label="Add debt" title="Add debt"><Plus size={24} /></button>
           </>
         )}
@@ -112,6 +123,8 @@ export default function DebtsPage() {
           debt={editingDebt}
           runningBalance={editingDebt ? h.runningBalances[editingDebt.id]?.balance : null}
           growing={editingDebt ? isGrowing(editingDebt) : false}
+          paymentsApplied={editingDebt ? h.runningBalances[editingDebt.id]?.paymentsApplied || 0 : 0}
+          userName={h.userName}
           categoryPatch={h.categoryPatch}
           onSave={(fields) => (editingDebt ? h.updateDebt(editingDebt.id, fields) : h.addDebt(fields))}
           onArchive={() => editingDebt && h.removeDebt(editingDebt.id)}

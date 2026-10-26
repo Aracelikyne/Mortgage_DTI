@@ -6,7 +6,8 @@ import SegmentedControl from "./ui/SegmentedControl";
 import { ListRow, ListSection, SelectField, SwitchRow } from "./ui/List";
 import { readSpreadsheetFile, spreadsheetAccept, SPREADSHEET_EXTENSIONS } from "../lib/spreadsheet";
 import { supabase } from "../lib/supabaseClient";
-import { money } from "../utils/finance";
+import { isoDate, money } from "../utils/finance";
+import { buildStatementPlan } from "../utils/statementSync";
 import { ordinal } from "../utils/format";
 import {
   IMPORT_TARGETS, autoMapColumns, buildPreview, columnLabels, detectHeaderRow, markDuplicateExpenses,
@@ -15,11 +16,19 @@ import {
 import { useHouseholdContext } from "../state/HouseholdContext";
 
 const TARGET_OPTIONS = [
+  { value: "statement", label: "Statement" },
   { value: "debts", label: "Debts" },
   { value: "fixed", label: "Fixed" },
   { value: "expenses", label: "Expenses" },
 ];
 const EXPENSE_BATCH = 100;
+const STATEMENT_BADGE = {
+  update: ["Update", "badge-blue"],
+  "new-debts": ["New debt", "badge-green"],
+  "new-fixed": ["New fixed expense", "badge-green"],
+  missing: ["Not on list", "badge-orange"],
+  skip: ["Skipped", "badge-red"],
+};
 
 function describeValues(v, target) {
   if (target === "expenses") return [v.date, v.category].filter(Boolean).join(" · ");
@@ -73,11 +82,13 @@ export default function ImportSheet({ initialTarget = "debts", onClose }) {
   const { debts, fixed } = h;
   const existing = useMemo(() => (target === "debts" ? debts : target === "fixed" ? fixed : []), [target, debts, fixed]);
 
+  const statementBy = h.userName;
   const preview = useMemo(() => {
     if (step !== "preview" && step !== "done") return [];
+    if (target === "statement") return buildStatementPlan({ rows, headerRow, mapping, debts, fixed, asOf: isoDate(new Date()), by: statementBy });
     const built = buildPreview({ rows, headerRow, mapping, target, existing });
     return target === "expenses" && existingExpenses ? markDuplicateExpenses(built, existingExpenses) : built;
-  }, [step, rows, headerRow, mapping, target, existing, existingExpenses]);
+  }, [step, rows, headerRow, mapping, target, existing, existingExpenses, debts, fixed, statementBy]);
   const isSelected = (p) => selection[p.index] ?? p.selected;
   // Expense rows aren't shown (or importable) until the repeat check is
   // back — otherwise an already-logged row reads "New" for a moment.
@@ -182,6 +193,26 @@ export default function ImportSheet({ initialTarget = "debts", onClose }) {
     }
     let added = 0;
     let updated = 0;
+    if (target === "statement") {
+      let flagged = 0;
+      for (const p of chosen) {
+        const update = p.target === "debts" ? h.updateDebt : h.updateFixed;
+        if (p.kind === "new") {
+          if (p.target === "debts") h.addDebt(p.fields);
+          else h.addFixed(p.fields);
+          added++;
+        } else if (p.kind === "update") {
+          update(p.existingId, p.patch);
+          updated++;
+        } else if (p.kind === "missing") {
+          update(p.existingId, p.patch);
+          flagged++;
+        }
+      }
+      setResult({ added, updated, flagged });
+      setStep("done");
+      return;
+    }
     for (const p of chosen) {
       if (p.match.kind === "update") {
         const patch = patchFrom(p.match.changes, p.values);
@@ -200,7 +231,7 @@ export default function ImportSheet({ initialTarget = "debts", onClose }) {
 
   const missingRequired = fields.filter((f) => f.required && (mapping[f.key] === null || mapping[f.key] === undefined));
   const blockedBySandbox = target === "expenses" && h.sandboxActive;
-  const noun = target === "debts" ? "debt" : target === "fixed" ? "fixed expense" : "expense";
+  const noun = target === "debts" ? "debt" : target === "fixed" ? "fixed expense" : target === "statement" ? "bill" : "expense";
   const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
 
   // onDone returning false keeps the sheet open; the async steps can't
@@ -284,7 +315,9 @@ export default function ImportSheet({ initialTarget = "debts", onClose }) {
             header="Columns"
             footer={missingRequired.length
               ? `Pick a column for ${missingRequired.map((f) => f.label).join(" and ")} to continue.`
-              : target === "expenses"
+              : target === "statement"
+                ? "Every bill is matched by name across Debts and Fixed Expenses. Payoffs and APRs on the list are taken as current (a missing payoff is cleared and marked as needing info). A different monthly payment or due day, an APR the list doesn't have, and bills the list doesn't mention are flagged for review — not changed."
+                : target === "expenses"
                 ? "Each row becomes a new expense."
                 : `Rows are matched to your existing ${IMPORT_TARGETS[target].label.toLowerCase()} by name: a match is updated (only the columns mapped here), anything else is added.`}
           >
@@ -307,7 +340,7 @@ export default function ImportSheet({ initialTarget = "debts", onClose }) {
           <div className="import-summary">
             <span>
               {chosen.length} of {preview.length} selected
-              {target !== "expenses" && ` · ${chosen.filter((p) => p.match.kind !== "update").length} new · ${plural(chosen.filter((p) => p.match.kind === "update").length, "update")}`}
+              {target !== "expenses" && target !== "statement" && ` · ${chosen.filter((p) => p.match.kind !== "update").length} new · ${plural(chosen.filter((p) => p.match.kind === "update").length, "update")}`}
             </span>
             <span>
               <button type="button" className="btn-link small" onClick={() => setSelection(Object.fromEntries(preview.map((p) => [p.index, true])))}>All</button>
@@ -317,7 +350,33 @@ export default function ImportSheet({ initialTarget = "debts", onClose }) {
           </div>
           {importing && <p className="muted small">Imported {progress} of {chosen.length}…</p>}
           {blockedBySandbox && <Banner tone="warning">Exit Sandbox to import expenses.</Banner>}
-          <ListSection>
+          {target === "statement" && (
+            <ListSection footer="Payoffs taken from the list are stamped as updated today, so only payments made after today come off them.">
+              {preview.map((p) => {
+                const on = isSelected(p);
+                const [badgeText, badgeClass] = p.problems.length ? ["Skipped", "badge-red"] : STATEMENT_BADGE[p.kind === "new" ? `new-${p.target}` : p.kind];
+                return (
+                  <button
+                    key={p.index}
+                    type="button"
+                    className={`row row-button import-row ${on ? "" : "unselected"}`}
+                    role="checkbox"
+                    aria-checked={on}
+                    onClick={() => setSelection((s) => ({ ...s, [p.index]: !on }))}
+                  >
+                    {on ? <CheckCircle2 size={22} className="import-check on" aria-hidden="true" /> : <Circle size={22} className="import-check" aria-hidden="true" />}
+                    <span className="row-body">
+                      <span className="row-title">{p.name || "(no name)"} <span className={`badge ${badgeClass}`}>{badgeText}</span></span>
+                      <span className={`row-subtitle ${p.problems.length ? "tone-red" : ""}`}>
+                        {p.rowNumber ? `Row ${p.rowNumber} · ` : ""}{(p.problems.length ? p.problems : p.notes).join("; ") || describeValues(p.fields || {}, "debts")}
+                      </span>
+                    </span>
+                  </button>
+                );
+              })}
+            </ListSection>
+          )}
+          {target !== "statement" && <ListSection>
             {preview.map((p) => {
               const on = isSelected(p);
               const [badgeText, badgeClass] = p.problems.length ? ["Can't import as is", "badge-red"] : MATCH_BADGE[p.match.kind];
@@ -346,16 +405,17 @@ export default function ImportSheet({ initialTarget = "debts", onClose }) {
                 </button>
               );
             })}
-          </ListSection>
+          </ListSection>}
         </>
       )}
 
       {step === "done" && result && (
-        <ListSection footer={target === "expenses" ? "They're on the Expenses tab." : `Edit any of them on the ${IMPORT_TARGETS[target].label} tab.`}>
+        <ListSection footer={target === "expenses" ? "They're on the Expenses tab." : target === "statement" ? "Bills needing review or info are marked on the Debts and Fixed Expenses tabs." : `Edit any of them on the ${IMPORT_TARGETS[target].label} tab.`}>
           {result.added > 0 && <ListRow title={`Added ${plural(result.added, noun)}`} accessory={<CheckCircle2 size={20} className="tone-green" />} />}
           {result.updated > 0 && <ListRow title={`Updated ${plural(result.updated, noun)}`} accessory={<CheckCircle2 size={20} className="tone-green" />} />}
           {result.failed > 0 && <ListRow title={`${plural(result.failed, noun)} not imported`} subtitle={result.error} />}
-          {!result.added && !result.updated && !result.failed && <ListRow title="Nothing was imported" />}
+          {result.flagged > 0 && <ListRow title={`Flagged ${plural(result.flagged, "bill")} not on the list for review`} />}
+          {!result.added && !result.updated && !result.failed && !result.flagged && <ListRow title="Nothing was imported" />}
         </ListSection>
       )}
     </Sheet>

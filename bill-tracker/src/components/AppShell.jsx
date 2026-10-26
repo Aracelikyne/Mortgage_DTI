@@ -148,7 +148,7 @@ export default function AppShell({ saved, userId, userName, initialLastEditedBy,
           {!sidebarCollapsed && (
             <div className="sidebar-section">
               <div className="sidebar-section-title">Tools</div>
-              <button type="button" className="sidebar-item" onClick={() => setImportTarget(page === "fixed" ? "fixed" : page === "expenses" ? "expenses" : "debts")}>
+              <button type="button" className="sidebar-item" onClick={() => setImportTarget(page === "expenses" ? "expenses" : "statement")}>
                 <FileUp size={21} aria-hidden="true" /><span className="sidebar-label">Import from Numbers</span>
               </button>
               <button type="button" className="sidebar-item" onClick={() => setShowNotes(true)}>

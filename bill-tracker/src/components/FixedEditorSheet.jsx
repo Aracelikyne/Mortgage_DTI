@@ -1,6 +1,7 @@
 import { useState } from "react";
 import Sheet, { SheetAction } from "./ui/Sheet";
 import AutopayFields from "./AutopayFields";
+import ReviewSection from "./ReviewSection";
 import { ListSection, NumberField, SelectField, SwitchRow, TextField } from "./ui/List";
 import { FIXED_CATEGORY_OPTIONS } from "../data/constants";
 import { autopayDraft, autopayIncomplete, autopayPatch } from "../utils/autopay";
@@ -17,6 +18,7 @@ export default function FixedEditorSheet({ item, onSave, onDelete, onClose }) {
     graceDays: asInput(item?.graceDays ?? 0),
     note: item?.note || "",
     splitFriendly: !!item?.splitFriendly,
+    review: item?.review || {},
     ...autopayDraft(item),
   }));
   const set = (k) => (v) => setDraft((d) => ({ ...d, [k]: v }));
@@ -31,6 +33,7 @@ export default function FixedEditorSheet({ item, onSave, onDelete, onClose }) {
       graceDays: fromInput(draft.graceDays, 0),
       note: draft.note,
       splitFriendly: draft.splitFriendly,
+      review: draft.review,
       ...autopayPatch(draft),
     });
   }
@@ -38,6 +41,7 @@ export default function FixedEditorSheet({ item, onSave, onDelete, onClose }) {
   return (
     <Sheet title={isNew ? "New Expense" : "Edit Expense"} onClose={onClose} onDone={save} doneLabel={isNew ? "Add" : "Done"} doneDisabled={!valid}>
       <>
+        <ReviewSection draft={draft} setDraft={setDraft} />
         <ListSection>
           <TextField label="Name" value={draft.name} onChange={set("name")} placeholder="e.g. Power" autoFocus={isNew} />
           <SelectField label="Type" value={draft.type} onChange={set("type")} options={FIXED_CATEGORY_OPTIONS} />

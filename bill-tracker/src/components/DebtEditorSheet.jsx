@@ -1,11 +1,13 @@
 import { useState } from "react";
 import Sheet, { SheetAction } from "./ui/Sheet";
 import AutopayFields from "./AutopayFields";
+import ReviewSection from "./ReviewSection";
 import { autopayDraft, autopayIncomplete, autopayPatch } from "../utils/autopay";
 import { ListSection, NumberField, SelectField, SwitchRow, TextField } from "./ui/List";
 import { CATEGORY_OPTIONS, PRIORITY_OPTIONS } from "../data/constants";
-import { BALANCE_ANCHOR_DATE, fmtDate, money } from "../utils/finance";
-import { asInput, fromInput } from "../utils/format";
+import { balanceAnchorOf, isoDate, money } from "../utils/finance";
+import { needsInfo } from "../utils/statementSync";
+import { asInput, fromInput, shortDate } from "../utils/format";
 
 function categoryValueOf(d) {
   return d.protected ? "protected" : String(d.priority ?? 2);
@@ -14,8 +16,10 @@ function categoryValueOf(d) {
 // Add or edit one debt — everything the old spreadsheet row held, as an iOS
 // form. Changes apply on Done, as one edit (and one activity-log entry),
 // not a save per keystroke. `runningBalance` is where the balance actually
-// stands today once payments since the anchor date are counted.
-export default function DebtEditorSheet({ debt, runningBalance, growing, onSave, onArchive, onClose, categoryPatch }) {
+// stands today once payments since the payoff's as-of date are counted.
+// Changing the payoff restamps it as updated today by `userName`, so only
+// payments after today come off the new figure.
+export default function DebtEditorSheet({ debt, runningBalance, paymentsApplied = 0, growing, userName, onSave, onArchive, onClose, categoryPatch }) {
   const isNew = !debt;
   const [draft, setDraft] = useState(() => ({
     name: debt?.name || "",
@@ -28,6 +32,7 @@ export default function DebtEditorSheet({ debt, runningBalance, growing, onSave,
     graceDays: asInput(debt?.graceDays ?? 0),
     inGoal: debt ? !debt.excludeFromGoal : true,
     splitFriendly: !!debt?.splitFriendly,
+    review: debt?.review || {},
     ...autopayDraft(debt),
   }));
   const set = (k) => (v) => setDraft((d) => ({ ...d, [k]: v }));
@@ -39,11 +44,15 @@ export default function DebtEditorSheet({ debt, runningBalance, growing, onSave,
   const valid = draft.name.trim() !== "" && (!isNew || draft.monthly !== "") && !autopayIncomplete(draft);
 
   function save() {
+    const balance = fromInput(draft.balance);
+    const payoffChanged = isNew || String(balance ?? "") !== String(debt.balance ?? "");
     onSave({
       name: draft.name.trim(),
       type: draft.type,
       monthly: fromInput(draft.monthly, 0),
-      balance: fromInput(draft.balance),
+      balance,
+      ...(payoffChanged ? { balanceAsOf: isoDate(new Date()), balanceUpdatedBy: userName } : {}),
+      review: draft.review,
       apr: fromInput(draft.apr),
       dueDay: fromInput(draft.dueDay),
       graceDays: fromInput(draft.graceDays, 0),
@@ -56,10 +65,12 @@ export default function DebtEditorSheet({ debt, runningBalance, growing, onSave,
 
   const showRunning = !isNew && runningBalance !== null && runningBalance !== undefined
     && (Math.abs(runningBalance - Number(debt.balance || 0)) >= 0.5 || growing);
+  const missing = needsInfo({ balance: fromInput(draft.balance), apr: fromInput(draft.apr) });
 
   return (
     <Sheet title={isNew ? "New Debt" : "Edit Debt"} onClose={onClose} onDone={save} doneLabel={isNew ? "Add" : "Done"} doneDisabled={!valid}>
       <>
+        <ReviewSection draft={draft} setDraft={setDraft} />
         <ListSection>
           <TextField label="Name" value={draft.name} onChange={set("name")} placeholder="e.g. Amex" autoFocus={isNew} />
           <SelectField label="Type" value={draft.type} onChange={set("type")} options={CATEGORY_OPTIONS} />
@@ -69,19 +80,21 @@ export default function DebtEditorSheet({ debt, runningBalance, growing, onSave,
         <ListSection
           footer={(
             <>
-              The balance is what you owed as of {fmtDate(new Date(BALANCE_ANCHOR_DATE + "T00:00:00"))}; every payment logged
-              since then is applied on top of it.
+              {isNew
+                ? "The payoff is what you owe today; every payment logged after today comes off it, interest included."
+                : <>Payoff last updated {shortDate(balanceAnchorOf(debt))}{debt.balanceUpdatedBy ? ` by ${debt.balanceUpdatedBy}` : ""}. Payments logged after that date come off it automatically, interest included.</>}
               {showRunning && (
                 <span className={growing ? "tone-red" : "tone-green"}>
-                  {" "}{growing ? "Growing — " : "Now "}{money(runningBalance)} after payments{growing ? " (payments aren't covering the interest)" : ""}.
+                  {" "}{growing ? "Growing — " : "Now "}{money(runningBalance)} after {paymentsApplied} payment{paymentsApplied === 1 ? "" : "s"}{growing ? " (payments aren't covering the interest)" : ""}.
                 </span>
               )}
+              {missing.length > 0 && <span className="tone-red"> Needs info: {missing.join(" and ")}.</span>}
             </>
           )}
         >
           <NumberField label="Monthly payment" value={draft.monthly} onChange={set("monthly")} placeholder="required" />
-          <NumberField label="Balance" value={draft.balance} onChange={set("balance")} placeholder={draft.category === "protected" ? "unknown" : "0"} />
-          <NumberField label="APR %" value={draft.apr} onChange={set("apr")} placeholder="optional" />
+          <NumberField label="Payoff" value={draft.balance} onChange={set("balance")} placeholder="Needs info" />
+          <NumberField label="APR %" value={draft.apr} onChange={set("apr")} placeholder="Needs info" />
           <NumberField label="Due day of month" value={draft.dueDay} onChange={set("dueDay")} placeholder="optional" min="1" max="31" step="1" />
           <NumberField label="Grace period (days)" value={draft.graceDays} onChange={set("graceDays")} placeholder="0" min="0" step="1" />
         </ListSection>

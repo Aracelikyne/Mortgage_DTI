@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 import {
-  computeRunningBalance, allocateMaxCashFlow, allocateExtra, minimumAdjustedDebts, fastestStrategyForBoost,
+  computeRunningBalance, computeAllRunningBalances, autopayDebitsSince, allocateMaxCashFlow, allocateExtra, minimumAdjustedDebts, fastestStrategyForBoost,
   getPaymentRecord, clearPaymentRecord, addExtraPayments, removeExtraBatch, latestExtraBatch,
   suggestExtraAllocation, buildPaycheckPlan, derivedBillExpenses, isoDate,
 } from "./finance";
@@ -239,5 +239,35 @@ describe("isoDate", () => {
   it("uses the local calendar date, not UTC", () => {
     expect(isoDate(new Date(2026, 9, 25, 23, 30))).toBe("2026-10-25");
     expect(isoDate(new Date(2026, 0, 1, 0, 5))).toBe("2026-01-01");
+  });
+});
+
+describe("per-debt payoff anchors and autopay", () => {
+  afterEach(() => vi.useRealTimers());
+
+  it("only payments after a debt's own as-of date come off its payoff", () => {
+    const d = card({ apr: 0, balanceAsOf: "2026-10-25" });
+    const rb = computeRunningBalance(d, [{ amount: 100, date: "2026-10-11" }, { amount: 50, date: "2026-10-30" }]);
+    expect(rb.balance).toBe(950);
+    expect(rb.paymentsApplied).toBe(1);
+    expect(rb.asOf).toBe("2026-10-25");
+  });
+
+  it("counts autopay debits since the as-of date, except months logged by hand", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(2027, 0, 20));
+    const d = card({ id: "w", apr: 0, monthly: 720, dueDay: 26, autopay: true, autopayFrequency: "monthly", balanceAsOf: "2026-10-25" });
+    // debits Oct 26, Nov 26, Dec 26 — but December's payment was logged by hand
+    const pbm = { "2026-12": { w: { payments: [{ id: "m", amount: 720, date: "2026-12-26" }] } } };
+    expect(autopayDebitsSince(d, pbm).map((x) => x.date)).toEqual(["2026-10-26", "2026-11-26"]);
+    const rb = computeAllRunningBalances([d], pbm).w;
+    expect(rb.balance).toBe(0); // $1,000 payoff, three $720 payments since
+  });
+
+  it("follows a biweekly autopay schedule", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(2026, 10, 20));
+    const d = card({ id: "b", apr: 0, autopay: true, autopayFrequency: "biweekly", autopayAnchor: "2026-10-03", autopayAmount: 450, balanceAsOf: "2026-10-25" });
+    expect(autopayDebitsSince(d, {}).map((x) => x.date)).toEqual(["2026-10-31", "2026-11-14"]);
   });
 });

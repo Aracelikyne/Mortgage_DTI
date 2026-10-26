@@ -33,7 +33,7 @@ export default function MorePage() {
         )}
 
         <ListSection header="Tools">
-          <ListRow icon={<FileUp size={17} />} iconColor="var(--green)" title="Import from Numbers" onClick={() => h.openImport("debts")} />
+          <ListRow icon={<FileUp size={17} />} iconColor="var(--green)" title="Import from Numbers" onClick={() => h.openImport("statement")} />
           <ListRow icon={<NotebookPen size={17} />} iconColor="var(--yellow-icon)" title="Shared Notes" detail={h.notes.notes.length || null} onClick={h.openNotes} />
           <ListRow icon={<ArrowUpDown size={17} />} iconColor="var(--gray)" title="Reorder Tabs" onClick={h.openTabOrder} />
         </ListSection>
