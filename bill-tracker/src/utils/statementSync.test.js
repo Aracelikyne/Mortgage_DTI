@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { buildStatementPlan, needsInfo, reviewItems, resolveReview } from "./statementSync";
+import { buildStatementPlan, nameSimilarity, needsInfo, reviewItems, resolveReview, statementAsOfGuess } from "./statementSync";
 import { autoMapColumns, detectHeaderRow } from "./importParse";
 
 const rows = [
@@ -78,5 +78,88 @@ describe("review flags", () => {
     expect(reviewItems(item).map((r) => r.key)).toEqual(["monthly", "apr"]);
     expect(resolveReview(item, "monthly", true)).toEqual({ monthly: 57, review: { apr: { missingOnStatement: true, current: 24.99 } } });
     expect(resolveReview(item, "monthly", false)).toEqual({ review: { apr: { missingOnStatement: true, current: 24.99 } } });
+  });
+});
+
+describe("no duplicates", () => {
+  const sheet = (names) => [["Bill", "Monthly", "Due", "Payoffs", "APR"], ...names.map((n) => [n, "US$50.00", "10", "US$500.00", "20"])];
+  const map = { name: 0, monthly: 1, dueDay: 2, balance: 3, apr: 4 };
+  const run = (names, siteDebts, picks) => buildStatementPlan({ rows: sheet(names), headerRow: 0, mapping: map, debts: siteDebts, fixed: [], asOf: "2026-10-31", by: "Sadler", picks });
+  const site = [
+    { id: "amex", name: "Amex Blue Cash", monthly: 50, dueDay: 10, balance: 600, apr: 20 },
+    { id: "sk-egg", name: "Best Egg (SK)", monthly: 50, dueDay: 10, balance: 600, apr: 20 },
+    { id: "cap", name: "Capital One", monthly: 50, dueDay: 10, balance: 600, apr: 20 },
+    { id: "nfcu", name: "Navy Federal", monthly: 50, dueDay: 10, balance: 600, apr: 20 },
+  ];
+
+  it("suggests the closest-named bill instead of adding a new one", () => {
+    const plan = run(["AMEX", "SK Best Egg", "Cap 1"], site);
+    expect(plan.filter((p) => p.rowNumber).map((p) => [p.name, p.kind, p.existingId, p.matchedBy])).toEqual([
+      ["AMEX", "update", "amex", "suggested"],
+      ["SK Best Egg", "update", "sk-egg", "suggested"],
+      ["Cap 1", "update", "cap", "suggested"],
+    ]);
+    expect(plan.filter((p) => p.kind === "new")).toEqual([]);
+  });
+
+  it("asks rather than guesses when no name is close, and offers every unmatched bill", () => {
+    const [row] = run(["NFCU CC"], site);
+    expect(row.kind).toBe("new");
+    expect(row.choices.map((c) => c.id).sort()).toEqual(["amex", "cap", "nfcu", "sk-egg"]);
+  });
+
+  it("follows the person's pick, and 'new' when they say so", () => {
+    const picked = run(["NFCU CC"], site, { 0: "nfcu" });
+    expect(picked[0]).toMatchObject({ kind: "update", existingId: "nfcu", matchedBy: "picked" });
+    expect(picked.some((p) => p.kind === "missing" && p.existingId === "nfcu")).toBe(false);
+    expect(run(["AMEX"], site, { 0: "new" })[0].kind).toBe("new");
+  });
+
+  it("never matches two rows to the same bill", () => {
+    const plan = run(["Capital One", "Cap 1"], site, { 1: "cap" });
+    expect(plan[0]).toMatchObject({ kind: "update", existingId: "cap", matchedBy: "name" });
+    expect(plan[1].selected).toBe(false);
+    expect(plan[1].problems[0]).toMatch(/already matched/);
+    expect(plan[1].choices.some((c) => c.id === "cap")).toBe(false);
+  });
+
+  it("skips a bill listed twice in the file", () => {
+    const plan = run(["Navy Federal", "navy federal"], site);
+    expect(plan[1]).toMatchObject({ kind: "skip", selected: false });
+    expect(plan[1].problems[0]).toMatch(/listed twice — row 2/);
+  });
+
+  it("running the same import again adds nothing", () => {
+    const first = run(["Brand New Loan"], site);
+    const added = { id: "x", ...first[0].fields };
+    const again = run(["Brand New Loan"], [...site, added]);
+    expect(again[0]).toMatchObject({ kind: "update", existingId: "x", matchedBy: "name" });
+    expect(again.filter((p) => p.kind === "new")).toEqual([]);
+  });
+
+  it("remembers a matched statement name, so the next import lines up by itself", () => {
+    const first = run(["NFCU CC"], site, { 0: "nfcu" });
+    expect(first[0].patch.statementNames).toEqual(["NFCU CC"]);
+    const updated = site.map((d) => (d.id === "nfcu" ? { ...d, ...first[0].patch } : d));
+    expect(run(["NFCU CC"], updated)[0]).toMatchObject({ kind: "update", existingId: "nfcu", matchedBy: "name" });
+  });
+
+  it("scores names", () => {
+    expect(nameSimilarity("SK Best Egg", "Best Egg (SK)")).toBe(1);
+    expect(nameSimilarity("MAK Cap2", "Mak Capital 2")).toBe(1);
+    expect(nameSimilarity("Tires", "Kayak")).toBe(0);
+  });
+});
+
+describe("statement date", () => {
+  it("a 'November 2026' title means payoffs are good through October 31", () => {
+    expect(statementAsOfGuess(rows, 1, new Date(2026, 9, 25))).toBe("2026-10-31");
+  });
+  it("falls back to today with no title", () => {
+    expect(statementAsOfGuess([["Bill"]], 0, new Date(2026, 9, 25))).toBe("2026-10-25");
+  });
+  it("stamps the payoff date and when it was updated separately", () => {
+    const p = buildStatementPlan({ rows, headerRow, mapping, debts, fixed, asOf: "2026-10-31", updatedOn: "2026-10-25", by: "Sadler" });
+    expect(p.find((x) => x.name === "Card B").patch).toMatchObject({ balanceAsOf: "2026-10-31", balanceUpdatedAt: "2026-10-25", balanceUpdatedBy: "Sadler" });
   });
 });

@@ -829,6 +829,8 @@ span.mark-paid { cursor: default; }
 .import-row.unselected .row-title { color: var(--label-2); }
 .import-check { color: var(--gray3); flex-shrink: 0; margin-top: 1px; }
 .import-check.on { color: var(--tint); }
+.import-pick { padding-left: 34px; }
+.import-pick .row { --sep-inset: 0px; }
 
 /* ---------- quick expense ---------- */
 .quick-sources { display: flex; gap: 10px; margin-bottom: 14px; }

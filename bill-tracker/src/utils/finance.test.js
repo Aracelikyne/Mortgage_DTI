@@ -297,3 +297,19 @@ describe("simulatePayoff", () => {
     expect(sim.noPayoffDebts).toEqual(["No payoff yet"]);
   });
 });
+
+describe("payoff good through a statement date", () => {
+  const debt = { id: "d", balance: 1000, apr: 0, monthly: 100, dueDay: 28, balanceAsOf: "2026-10-31" };
+  it("payments already in the payoff don't come off again; later bill months do", () => {
+    const paid = {
+      "2026-10": { d: { payments: [{ amount: 100, date: "2026-10-28" }] } }, // October's — already in the payoff
+      "2026-11": { d: { payments: [{ amount: 100, date: "2026-10-30" }] } }, // November's, paid early
+    };
+    expect(computeAllRunningBalances([debt], paid, new Date(2026, 10, 2)).d.balance).toBe(900);
+  });
+  it("an autopay due before the statement date isn't taken again", () => {
+    const auto = { ...debt, autopay: true, autopayFrequency: "monthly" };
+    expect(autopayDebitsSince(auto, {}, new Date(2026, 10, 2))).toEqual([]);
+    expect(autopayDebitsSince(auto, {}, new Date(2026, 10, 29)).map((p) => p.date)).toEqual(["2026-11-28"]);
+  });
+});

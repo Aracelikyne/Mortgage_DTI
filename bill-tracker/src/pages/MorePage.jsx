@@ -1,4 +1,4 @@
-import { ArrowUpDown, Bell, FileUp, FlaskConical, NotebookPen } from "lucide-react";
+import { ArrowUpDown, Bell, CopyCheck, FileUp, FlaskConical, NotebookPen } from "lucide-react";
 import PageHeader from "../components/PageHeader";
 import { ListButton, ListRow, ListSection } from "../components/ui/List";
 import Switch from "../components/ui/Switch";
@@ -36,6 +36,7 @@ export default function MorePage() {
 
         <ListSection header="Tools">
           <ListRow icon={<FileUp size={17} />} iconColor="var(--green)" title="Import from Numbers" onClick={() => h.openImport("statement")} />
+          <ListRow icon={<CopyCheck size={17} />} iconColor="var(--indigo)" title="Duplicates" detail={h.duplicateGroups.length || null} onClick={h.openDuplicates} />
           <ListRow icon={<NotebookPen size={17} />} iconColor="var(--yellow-icon)" title="Shared Notes" detail={h.notes.notes.length || null} onClick={h.openNotes} />
           <ListRow icon={<ArrowUpDown size={17} />} iconColor="var(--gray)" title="Reorder Tabs" onClick={h.openTabOrder} />
         </ListSection>

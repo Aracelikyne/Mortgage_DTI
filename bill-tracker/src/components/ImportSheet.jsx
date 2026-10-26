@@ -3,12 +3,12 @@ import { CheckCircle2, Circle, FileSpreadsheet } from "lucide-react";
 import Sheet from "./ui/Sheet";
 import Banner from "./ui/Banner";
 import SegmentedControl from "./ui/SegmentedControl";
-import { ListRow, ListSection, SelectField, SwitchRow } from "./ui/List";
+import { ListRow, ListSection, SelectField, SwitchRow, TextField } from "./ui/List";
 import { readSpreadsheetFile, spreadsheetAccept, SPREADSHEET_EXTENSIONS } from "../lib/spreadsheet";
 import { supabase } from "../lib/supabaseClient";
 import { isoDate, money } from "../utils/finance";
-import { buildStatementPlan } from "../utils/statementSync";
-import { ordinal } from "../utils/format";
+import { buildStatementPlan, statementAsOfGuess } from "../utils/statementSync";
+import { ordinal, shortDate } from "../utils/format";
 import {
   IMPORT_TARGETS, autoMapColumns, buildPreview, columnLabels, detectHeaderRow, markDuplicateExpenses,
   newDebtFrom, newFixedFrom, parseDelimited, patchFrom,
@@ -70,6 +70,8 @@ export default function ImportSheet({ initialTarget = "debts", onClose }) {
   const [target, setTarget] = useState(initialTarget);
   const [mapping, setMapping] = useState({});
   const [selection, setSelection] = useState({});
+  const [picks, setPicks] = useState({}); // statement row → bill id it is, or "new"
+  const [statementAsOf, setStatementAsOf] = useState(() => isoDate(new Date()));
   const [existingExpenses, setExistingExpenses] = useState(null);
   const [importing, setImporting] = useState(false);
   const [progress, setProgress] = useState(0);
@@ -85,10 +87,12 @@ export default function ImportSheet({ initialTarget = "debts", onClose }) {
   const statementBy = h.userName;
   const preview = useMemo(() => {
     if (step !== "preview" && step !== "done") return [];
-    if (target === "statement") return buildStatementPlan({ rows, headerRow, mapping, debts, fixed, asOf: isoDate(new Date()), by: statementBy });
+    if (target === "statement") {
+      return buildStatementPlan({ rows, headerRow, mapping, debts, fixed, asOf: statementAsOf, updatedOn: isoDate(new Date()), by: statementBy, picks });
+    }
     const built = buildPreview({ rows, headerRow, mapping, target, existing });
     return target === "expenses" && existingExpenses ? markDuplicateExpenses(built, existingExpenses) : built;
-  }, [step, rows, headerRow, mapping, target, existing, existingExpenses, debts, fixed, statementBy]);
+  }, [step, rows, headerRow, mapping, target, existing, existingExpenses, debts, fixed, statementBy, statementAsOf, picks]);
   const isSelected = (p) => selection[p.index] ?? p.selected;
   // Expense rows aren't shown (or importable) until the repeat check is
   // back — otherwise an already-logged row reads "New" for a moment.
@@ -148,6 +152,8 @@ export default function ImportSheet({ initialTarget = "debts", onClose }) {
 
   async function goToPreview() {
     setSelection({});
+    setPicks({});
+    setStatementAsOf(statementAsOfGuess(rows, headerRow));
     setExistingExpenses(null);
     setStep("preview");
     if (target === "expenses") {
@@ -351,13 +357,21 @@ export default function ImportSheet({ initialTarget = "debts", onClose }) {
           {importing && <p className="muted small">Imported {progress} of {chosen.length}…</p>}
           {blockedBySandbox && <Banner tone="warning">Exit Sandbox to import expenses.</Banner>}
           {target === "statement" && (
-            <ListSection footer="Payoffs taken from the list are stamped as updated today, so only payments made after today come off them.">
+            <ListSection footer={`Payments dated after ${shortDate(statementAsOf)} (or for a later month's bill) come off these payoffs automatically, interest included. Anything not matched by its exact name has a "Which bill is this?" choice — check those before importing.`}>
+              <TextField label="Payoffs include payments through" type="date" value={statementAsOf} onChange={(v) => v && setStatementAsOf(v)} />
+            </ListSection>
+          )}
+          {target === "statement" && (
+            <ListSection>
               {preview.map((p) => {
                 const on = isSelected(p);
-                const [badgeText, badgeClass] = p.problems.length ? ["Skipped", "badge-red"] : STATEMENT_BADGE[p.kind === "new" ? `new-${p.target}` : p.kind];
+                const [badgeText, badgeClass] = p.problems.length
+                  ? ["Skipped", "badge-red"]
+                  : p.matchedBy === "suggested" ? ["Check match", "badge-orange"] : STATEMENT_BADGE[p.kind === "new" ? `new-${p.target}` : p.kind];
+                const detail = (p.problems.length ? p.problems : p.notes).join("; ") || describeValues(p.fields || {}, "debts");
                 return (
+                  <div key={p.index} className="import-item">
                   <button
-                    key={p.index}
                     type="button"
                     className={`row row-button import-row ${on ? "" : "unselected"}`}
                     role="checkbox"
@@ -368,10 +382,25 @@ export default function ImportSheet({ initialTarget = "debts", onClose }) {
                     <span className="row-body">
                       <span className="row-title">{p.name || "(no name)"} <span className={`badge ${badgeClass}`}>{badgeText}</span></span>
                       <span className={`row-subtitle ${p.problems.length ? "tone-red" : ""}`}>
-                        {p.rowNumber ? `Row ${p.rowNumber} · ` : ""}{(p.problems.length ? p.problems : p.notes).join("; ") || describeValues(p.fields || {}, "debts")}
+                        {p.rowNumber ? `Row ${p.rowNumber} · ` : ""}
+                        {p.existingName && p.existingName !== p.name && p.kind === "update" ? `→ ${p.existingName}: ` : ""}{detail}
                       </span>
                     </span>
                   </button>
+                  {p.choices && (
+                    <div className="import-pick">
+                      <SelectField
+                        label="Which bill is this?"
+                        value={p.kind === "update" ? p.existingId : "new"}
+                        onChange={(v) => setPicks((s) => ({ ...s, [p.index]: v }))}
+                        options={[
+                          ...p.choices.map((c) => ({ value: c.id, label: `${c.name}${c.kind === "fixed" ? " (fixed)" : ""}` })),
+                          { value: "new", label: "Add as a new bill" },
+                        ]}
+                      />
+                    </div>
+                  )}
+                  </div>
                 );
               })}
             </ListSection>

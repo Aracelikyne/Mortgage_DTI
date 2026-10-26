@@ -3,6 +3,7 @@ import { FileUp, Plus, Zap } from "lucide-react";
 import PageHeader from "../components/PageHeader";
 import FixedEditorSheet from "../components/FixedEditorSheet";
 import BillBadges from "../components/BillBadges";
+import DuplicatesBanner from "../components/DuplicatesBanner";
 import { ListRow, ListSection } from "../components/ui/List";
 import { money } from "../utils/finance";
 import { ordinal } from "../utils/format";
@@ -25,6 +26,7 @@ export default function FixedPage() {
         )}
       />
       <div className="page-content">
+        <DuplicatesBanner kind="fixed" />
         {h.fixed.length === 0 ? (
           <p className="muted center">No fixed expenses yet — tap + to add rent, utilities, subscriptions…</p>
         ) : (

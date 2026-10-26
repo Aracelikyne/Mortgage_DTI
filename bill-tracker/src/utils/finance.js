@@ -170,8 +170,12 @@ export function computeRunningBalance(debt, allPayments) {
   const anchor = new Date(balanceAnchorOf(debt) + "T00:00:00");
   const hasApr = debt.apr !== null && debt.apr !== undefined && Number(debt.apr) > 0;
 
+  // A payment counts if it's dated after the payoff's as-of date, or filed
+  // under a later bill month — November's bill paid early, on Oct 30, isn't
+  // in an Oct 31 payoff.
+  const anchorMonth = monthKeyOf(anchor);
   const relevant = allPayments
-    .filter((p) => p.date && new Date(p.date + "T00:00:00") > anchor)
+    .filter((p) => p.date && (new Date(p.date + "T00:00:00") > anchor || (p.month && p.month > anchorMonth)))
     .slice()
     .sort((a, b) => new Date(a.date + "T00:00:00") - new Date(b.date + "T00:00:00"));
 
@@ -188,7 +192,7 @@ export function computeRunningBalance(debt, allPayments) {
     const paidOn = new Date(p.date + "T00:00:00");
     // Rounded: a span crossing a daylight-saving change is 23 or 25 hours short of whole days.
     const days = Math.max(0, Math.round((paidOn - accruedThrough) / DAY_MS));
-    accruedThrough = paidOn;
+    if (paidOn > accruedThrough) accruedThrough = paidOn;
     const interest = hasApr ? balance * (Number(debt.apr) / 100 / 365) * days : 0;
     const principal = amount - interest;
     if (principal < 0) growing = true;
@@ -239,12 +243,12 @@ export function autopayDebitsSince(debt, paidByMonth, today = new Date()) {
 // history since the anchor, not just whichever month is being viewed.
 export function allPaymentsForBill(paidByMonth, billId) {
   const out = [];
-  for (const monthEntry of Object.values(paidByMonth)) {
+  for (const [month, monthEntry] of Object.entries(paidByMonth)) {
     const raw = monthEntry[billId];
     if (raw && typeof raw === "object" && Array.isArray(raw.payments)) {
-      out.push(...raw.payments);
+      out.push(...raw.payments.map((p) => ({ ...p, month })));
     } else if (raw && typeof raw === "object" && raw.amountPaid > 0) {
-      out.push({ amount: raw.amountPaid, date: raw.paidDate || null });
+      out.push({ amount: raw.amountPaid, date: raw.paidDate || null, month });
     } else if (raw === true) {
       // legacy boolean records have no bill context here; skipped — they
       // predate running balances entirely and were paid before the anchor.

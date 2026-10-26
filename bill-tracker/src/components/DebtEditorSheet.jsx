@@ -51,7 +51,7 @@ export default function DebtEditorSheet({ debt, runningBalance, paymentsApplied 
       type: draft.type,
       monthly: fromInput(draft.monthly, 0),
       balance,
-      ...(payoffChanged ? { balanceAsOf: isoDate(new Date()), balanceUpdatedBy: userName } : {}),
+      ...(payoffChanged ? { balanceAsOf: isoDate(new Date()), balanceUpdatedAt: isoDate(new Date()), balanceUpdatedBy: userName } : {}),
       review: draft.review,
       apr: fromInput(draft.apr),
       dueDay: fromInput(draft.dueDay),
@@ -82,7 +82,7 @@ export default function DebtEditorSheet({ debt, runningBalance, paymentsApplied 
             <>
               {isNew
                 ? "The payoff is what you owe today; every payment logged after today comes off it, interest included."
-                : <>Payoff last updated {shortDate(balanceAnchorOf(debt))}{debt.balanceUpdatedBy ? ` by ${debt.balanceUpdatedBy}` : ""}. Payments logged after that date come off it automatically, interest included.</>}
+                : <>Payoff last updated {shortDate(debt.balanceUpdatedAt || balanceAnchorOf(debt))}{debt.balanceUpdatedBy ? ` by ${debt.balanceUpdatedBy}` : ""}. It includes payments through {shortDate(balanceAnchorOf(debt))}; payments after that come off automatically, interest included.</>}
               {showRunning && (
                 <span className={growing ? "tone-red" : "tone-green"}>
                   {" "}{growing ? "Growing — " : "Now "}{money(runningBalance)} after {paymentsApplied} payment{paymentsApplied === 1 ? "" : "s"}{growing ? " (payments aren't covering the interest)" : ""}.

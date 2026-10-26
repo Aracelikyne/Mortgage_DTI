@@ -1,4 +1,5 @@
 import { newId } from "../utils/ids";
+import { mergedBill, mergePayments } from "../utils/duplicates";
 import { addExtraPayments, addPaymentRecord, isoDate, monthKeyOf, removeExtraBatch, removePaymentRecord } from "../utils/finance";
 
 // Every edit the pages can make to the household data, in one place.
@@ -57,6 +58,25 @@ export function useHouseholdActions(h, model) {
     const item = { id: newId(), note: "", dueDay: null, graceDays: 0, ...newFixed };
     setFixed((prev) => [...prev, item]);
     return item;
+  }
+
+  // Merging duplicates: the kept bill takes every payment logged on the
+  // others and any details it's missing; the others are deleted outright
+  // (not archived as paid off — they were never separate debts).
+  function mergeBills(kind, keepId, removeIds) {
+    const list = kind === "debts" ? debts : h.fixed;
+    const keep = list.find((b) => b.id === keepId);
+    const others = list.filter((b) => removeIds.includes(b.id) && b.id !== keepId);
+    if (!keep || others.length === 0) return;
+    const setList = kind === "debts" ? setDebts : setFixed;
+    setList((prev) => prev.filter((b) => !removeIds.includes(b.id) || b.id === keepId).map((b) => (b.id === keepId ? mergedBill(b, others) : b)));
+    setPaidByMonth((prev) => mergePayments(prev, keep, others));
+  }
+  function markNotDuplicates(kind, ids) {
+    const setList = kind === "debts" ? setDebts : setFixed;
+    setList((prev) => prev.map((b) => (ids.includes(b.id)
+      ? { ...b, notDuplicateOf: [...new Set([...(b.notDuplicateOf || []), ...ids.filter((id) => id !== b.id)])] }
+      : b)));
   }
 
   function updateIncomeSource(id, patch) {
@@ -126,7 +146,7 @@ export function useHouseholdActions(h, model) {
 
   return {
     updateDebt, categoryPatch, addDebt, removeDebt, restoreDebt, deleteArchivedDebt,
-    updateFixed, removeFixed, addFixed,
+    updateFixed, removeFixed, addFixed, mergeBills, markNotDuplicates,
     updateIncomeSource, removeIncomeSource, addIncomeSource,
     addBoost, updateBoost, removeBoost,
     overridePaycheckDate, togglePaidFromPaycheckItem, applyExtraPayments, undoExtraBatch,

@@ -1,10 +1,12 @@
 import { useCallback, useMemo, useState } from "react";
-import { ArrowUpDown, Bell, Ellipsis, FileUp, FlaskConical, LogOut, NotebookPen } from "lucide-react";
+import { ArrowUpDown, Bell, CopyCheck, Ellipsis, FileUp, FlaskConical, LogOut, NotebookPen } from "lucide-react";
 import Sidebar from "./ui/Sidebar";
 import TabBar from "./ui/TabBar";
 import Switch from "./ui/Switch";
 import CursorOverlay from "./CursorOverlay";
 import NotesSheet from "./NotesSheet";
+import DuplicatesSheet from "./DuplicatesSheet";
+import { findDuplicateGroups } from "../utils/duplicates";
 import TabOrderSheet from "./TabOrderSheet";
 import ImportSheet from "./ImportSheet";
 import DashboardPage from "../pages/DashboardPage";
@@ -71,6 +73,8 @@ export default function AppShell({ saved, userId, userName, initialLastEditedBy,
   const notes = useNotes({ userId, userName });
   const [theme, setTheme] = useTheme();
   const [showNotes, setShowNotes] = useState(false);
+  const [showDuplicates, setShowDuplicates] = useState(false);
+  const duplicateGroups = useMemo(() => findDuplicateGroups(household.debts, household.fixed), [household.debts, household.fixed]);
   const [showTabOrder, setShowTabOrder] = useState(false);
   const [importTarget, setImportTarget] = useState(null); // "debts" | "fixed" | "expenses" while the import sheet is open
 
@@ -128,6 +132,8 @@ export default function AppShell({ saved, userId, userName, initialLastEditedBy,
     push,
     notes,
     openNotes: () => setShowNotes(true),
+    duplicateGroups,
+    openDuplicates: () => setShowDuplicates(true),
     openTabOrder: () => setShowTabOrder(true),
     openImport: (target = "debts") => setImportTarget(target),
     theme,
@@ -155,6 +161,10 @@ export default function AppShell({ saved, userId, userName, initialLastEditedBy,
               <div className="sidebar-section-title">Tools</div>
               <button type="button" className="sidebar-item" onClick={() => setImportTarget(page === "expenses" ? "expenses" : "statement")}>
                 <FileUp size={21} aria-hidden="true" /><span className="sidebar-label">Import from Numbers</span>
+              </button>
+              <button type="button" className="sidebar-item" onClick={() => setShowDuplicates(true)}>
+                <CopyCheck size={21} aria-hidden="true" /><span className="sidebar-label">Duplicates</span>
+                {duplicateGroups.length > 0 && <span className="sidebar-count num">{duplicateGroups.length}</span>}
               </button>
               <button type="button" className="sidebar-item" onClick={() => setShowNotes(true)}>
                 <NotebookPen size={21} aria-hidden="true" /><span className="sidebar-label">Shared Notes</span>
@@ -203,6 +213,7 @@ export default function AppShell({ saved, userId, userName, initialLastEditedBy,
 
       <CursorOverlay leaderState={live.leaderState} currentPage={page} />
 
+      {showDuplicates && <DuplicatesSheet onClose={() => setShowDuplicates(false)} />}
       {showNotes && (
         <NotesSheet notes={notes.notes} loadError={notes.loadError} onAdd={notes.addNote} onRemove={notes.removeNote} onClose={() => setShowNotes(false)} />
       )}

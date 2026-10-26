@@ -7,6 +7,7 @@ import { ListRow, ListSection } from "../components/ui/List";
 import { TIERS } from "../data/constants";
 import { balanceAnchorOf, fmtDate, isUnderwater, money, willNeverGetExtra } from "../utils/finance";
 import BillBadges from "../components/BillBadges";
+import DuplicatesBanner from "../components/DuplicatesBanner";
 import { ordinal, shortDate } from "../utils/format";
 import { useHouseholdContext } from "../state/HouseholdContext";
 
@@ -44,7 +45,7 @@ export default function DebtsPage() {
         subtitle={(
           <>
             {[d.type, d.dueDay ? `due the ${ordinal(d.dueDay)}` : null, growing ? "growing" : null].filter(Boolean).join(" · ")}
-            <span className="row-tracker">Payoff updated {shortDate(balanceAnchorOf(d))}{d.balanceUpdatedBy ? ` · by ${d.balanceUpdatedBy}` : ""}</span>
+            <span className="row-tracker">Payoff updated {shortDate(d.balanceUpdatedAt || balanceAnchorOf(d))}{d.balanceUpdatedBy ? ` · by ${d.balanceUpdatedBy}` : ""}</span>
           </>
         )}
         detail={(
@@ -71,6 +72,7 @@ export default function DebtsPage() {
         )}
       />
       <div className="page-content">
+        <DuplicatesBanner kind="debts" />
         {h.debts.length === 0 && h.paidOffDebts.length === 0 && (
           <p className="muted center">No debts yet — tap + to add one.</p>
         )}
