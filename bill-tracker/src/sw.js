@@ -10,7 +10,8 @@ self.addEventListener("activate", (event) => {
   event.waitUntil(self.clients.claim());
 });
 
-// A bill-reminder push arrives as JSON: { title, body, url }. Falls back to
+// A bill-reminder push arrives as JSON: { title, body, url, tag }. The tag
+// is per bill, so a newer reminder replaces the older one. Falls back to
 // a generic message if the payload is missing/malformed rather than
 // silently dropping the notification.
 self.addEventListener("push", (event) => {
@@ -26,6 +27,7 @@ self.addEventListener("push", (event) => {
     icon: "/Mortgage_DTI/icon-192.png",
     badge: "/Mortgage_DTI/icon-192.png",
     data: { url: payload.url || "/Mortgage_DTI/" },
+    ...(payload.tag && { tag: payload.tag, renotify: true }),
   };
   event.waitUntil(self.registration.showNotification(title, options));
 });

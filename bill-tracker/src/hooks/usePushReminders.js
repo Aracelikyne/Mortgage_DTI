@@ -19,6 +19,9 @@ function urlBase64ToUint8Array(base64String) {
 // notifications on this device, not the other person's.
 export function usePushReminders({ userId, userName }) {
   const [supported] = useState(() => "serviceWorker" in navigator && "PushManager" in window);
+  // iPhone Safari only offers push to a site added to the Home Screen
+  // (iOS 16.4+), so in a plain Safari tab the switch can't work yet.
+  const [needsHomeScreen] = useState(() => !supported && /iPhone|iPad|iPod/.test(navigator.userAgent) && !navigator.standalone);
   const [subscribed, setSubscribed] = useState(false);
   const [busy, setBusy] = useState(false);
 
@@ -75,5 +78,5 @@ export function usePushReminders({ userId, userName }) {
     setBusy(false);
   }, []);
 
-  return { supported, subscribed, busy, setEnabled: (on) => (on ? enable() : disable()) };
+  return { supported, needsHomeScreen, subscribed, busy, setEnabled: (on) => (on ? enable() : disable()) };
 }

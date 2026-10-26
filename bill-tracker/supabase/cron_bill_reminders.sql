@@ -7,6 +7,8 @@
 --      (VAPID_PUBLIC_KEY must match the constant in
 --      src/components/NotificationSettings.jsx — they're a matched pair,
 --      generated together; don't regenerate one without the other.)
+--      Optional — a daily email digest too (resend.com, free tier):
+--        supabase secrets set RESEND_API_KEY=... REMINDER_EMAIL_FROM="Clear to Close <reminders@yourdomain.com>" REMINDER_EMAIL_TO=a@example.com,b@example.com
 --
 -- Schedules that function to run once a day. Never put the service role key
 -- directly in this file — it's a full-database-bypass credential, and this

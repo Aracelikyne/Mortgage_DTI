@@ -42,7 +42,7 @@ export default function MorePage() {
 
         <ListSection
           header="Settings"
-          footer="Reminders are per device — turning them on here doesn't change the other person's. Sandbox lets you try numbers without saving anything; it all reverts when you turn it off."
+          footer="Reminders come 3 days before a bill is due, on the due date, and the day after if it isn't marked paid (autopay bills just get the 3-day heads-up). They're per device — turning them on here doesn't change the other person's. Sandbox lets you try numbers without saving anything; it all reverts when you turn it off."
         >
           {h.push.supported && (
             <div className="row has-icon switch-row">
@@ -50,6 +50,14 @@ export default function MorePage() {
               <span className="row-body"><span className="row-title">Bill reminders</span></span>
               <Switch checked={h.push.subscribed} disabled={h.push.busy} onChange={h.push.setEnabled} label="Bill reminders" />
             </div>
+          )}
+          {h.push.needsHomeScreen && (
+            <ListRow
+              icon={<Bell size={17} />}
+              iconColor="var(--red)"
+              title="Bill reminders"
+              subtitle="Tap Share → Add to Home Screen, open Clear to Close from there, and the switch shows up here."
+            />
           )}
           <div className="row has-icon switch-row">
             <span className="row-icon" style={{ background: "var(--orange)" }}><FlaskConical size={17} /></span>
