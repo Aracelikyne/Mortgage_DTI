@@ -16,8 +16,15 @@
     <meta name="apple-mobile-web-app-status-bar-style" content="default" />
     <meta name="format-detection" content="telephone=no" />
     <title>Clear to Close</title>
-    <script type="module" crossorigin src="/Mortgage_DTI/assets/index-B4XsS0jf.js"></script>
-    <link rel="stylesheet" crossorigin href="/Mortgage_DTI/assets/index-hBc7uVm-.css">
+    <script>
+      // Apply the saved Light/Dark choice before first paint (see src/hooks/useTheme.js).
+      try {
+        var t = JSON.parse(localStorage.getItem("ctc-theme"));
+        if (t === "light" || t === "dark") document.documentElement.dataset.theme = t;
+      } catch (e) {}
+    </script>
+    <script type="module" crossorigin src="/Mortgage_DTI/assets/index-TYuOXyXm.js"></script>
+    <link rel="stylesheet" crossorigin href="/Mortgage_DTI/assets/index-Bl552JDS.css">
   <link rel="manifest" href="/Mortgage_DTI/manifest.webmanifest"><script id="vite-plugin-pwa:register-sw" src="/Mortgage_DTI/registerSW.js"></script></head>
   <body>
     <div id="root"></div>
