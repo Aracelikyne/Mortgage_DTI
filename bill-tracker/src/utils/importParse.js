@@ -148,10 +148,16 @@ const TYPE_SYNONYMS = {
   "Childcare": ["childcare", "daycare", "child care"],
   "Insurance": ["insurance"],
   "Subscription": ["subscription", "streaming", "membership"],
-  Groceries: ["grocery", "groceries", "supermarket"],
+  Groceries: ["grocery", "groceries", "supermarket", "supermarkets"],
   Gas: ["gas", "fuel"],
   "Fast Food": ["fast food"],
-  "Dining Out": ["dining", "restaurant"],
+  "Dining Out": ["dining", "restaurant", "restaurants"],
+  // Apple Card statement export categories (Wallet → Card Balance → Export Transactions)
+  Health: ["medical", "pharmacy", "health"],
+  Travel: ["travel", "airline", "airlines", "hotel", "hotels", "lodging"],
+  Entertainment: ["entertainment"],
+  Shopping: ["shopping", "merchandise"],
+  Household: ["household", "home improvement"],
   Subscriptions: ["subscription"],
 };
 

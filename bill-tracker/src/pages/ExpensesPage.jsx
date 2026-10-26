@@ -117,6 +117,19 @@ export default function ExpensesPage() {
 
   const billExpenses = useMemo(() => derivedBillExpenses(debtBills, fixed, paidByMonth), [debtBills, fixed, paidByMonth]);
   const manualExpenses = useMemo(() => (rows || []).map(normalizeManualRow), [rows]);
+  // Merchants logged before, newest first, each with the category it was
+  // last logged under — so typing or scanning one fills its category in.
+  const { merchantCategories, recentMerchants } = useMemo(() => {
+    const categories = new Map();
+    const names = [];
+    for (const e of [...manualExpenses].sort((a, b) => (b.date || "").localeCompare(a.date || ""))) {
+      const key = (e.note || "").trim().toLowerCase();
+      if (!key || categories.has(key)) continue;
+      categories.set(key, e.category);
+      names.push(e.note.trim());
+    }
+    return { merchantCategories: categories, recentMerchants: names.slice(0, 50) };
+  }, [manualExpenses]);
   const allExpenses = useMemo(
     () => [...billExpenses, ...manualExpenses].sort((a, b) => new Date(b.date) - new Date(a.date)),
     [billExpenses, manualExpenses]
@@ -314,6 +327,8 @@ export default function ExpensesPage() {
       {editing && (
         <ExpenseEditorSheet
           expense={editingExpense}
+          merchantCategories={merchantCategories}
+          recentMerchants={recentMerchants}
           onSave={saveExpense}
           onDelete={() => editingExpense && deleteExpense(editingExpense)}
           onViewReceipt={openReceipt}

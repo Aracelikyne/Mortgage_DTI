@@ -830,6 +830,24 @@ span.mark-paid { cursor: default; }
 .import-check { color: var(--gray3); flex-shrink: 0; margin-top: 1px; }
 .import-check.on { color: var(--tint); }
 
+/* ---------- quick expense ---------- */
+.quick-sources { display: flex; gap: 10px; margin-bottom: 14px; }
+.quick-source { flex: 1; height: 40px; font-size: 15px; border-radius: 12px; cursor: pointer; }
+.quick-source.busy { opacity: 0.7; }
+.scan-note { font-size: 15px; line-height: 20px; color: var(--label-2); margin: -4px 4px 12px; }
+.amount-entry { display: flex; align-items: center; justify-content: center; gap: 2px; margin: 8px 0 18px; }
+.amount-currency { font-size: 34px; font-weight: 600; color: var(--label-2); }
+.amount-entry input {
+  width: 6.5ch; border: none; outline: none; background: transparent; text-align: left;
+  font-size: 44px; font-weight: 700; font-variant-numeric: tabular-nums; color: var(--label);
+}
+.category-chips { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 18px; }
+.category-chip {
+  border: none; border-radius: 999px; padding: 7px 12px; font-size: 15px; cursor: pointer;
+  background: var(--sheet-cell); color: var(--label);
+}
+.category-chip.active { background: var(--tint); color: #fff; }
+
 /* ---------- sign-in ---------- */
 .auth-screen {
   min-height: 100svh;
