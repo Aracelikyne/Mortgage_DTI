@@ -9,9 +9,14 @@
 
 export const REMINDER_DAYS_AHEAD = 3;
 
-export type Bill = { id: string; name: string; monthly?: number; dueDay?: number | null; graceDays?: number; autopay?: boolean };
+export type Bill = {
+  id: string; name: string; monthly?: number; dueDay?: number | null; graceDays?: number; autopay?: boolean;
+  autopayFrequency?: "monthly" | "biweekly" | null; autopayAnchor?: string | null; autopayAmount?: number | null;
+};
 export type ReminderKind = "upcoming" | "today" | "passed" | "overdue";
-export type Reminder = { bill: Bill; kind: ReminderKind; dueDate: Date };
+// `amount` is what's actually coming out on `dueDate` — for a biweekly
+// autopay that's one debit, not the monthly payment.
+export type Reminder = { bill: Bill; kind: ReminderKind; dueDate: Date; amount: number };
 
 function lastDayOfMonth(year: number, monthIndex: number) {
   return new Date(year, monthIndex + 1, 0).getDate();
@@ -57,9 +62,18 @@ function amountPaidFor(monthEntry: Record<string, unknown>, billId: string) {
 // Checks last month's, this month's and next month's due dates: a bill due
 // the 1st needs its heads-up at the end of the prior month, and one due the
 // 30th is "passed" or "overdue" early in the next.
+//
+// A biweekly autopay ignores its due day — it debits every 14 days from its
+// first debit — so its heads-up goes out REMINDER_DAYS_AHEAD days before each
+// debit, for that one debit's amount.
 export function billsDueForReminder(bills: Bill[], paidByMonth: Record<string, Record<string, unknown>>, today: Date): Reminder[] {
   const due: Reminder[] = [];
   for (const bill of bills) {
+    if (bill.autopay && bill.autopayFrequency === "biweekly") {
+      const debit = biweeklyDebitAhead(bill, today);
+      if (debit) due.push(debit);
+      continue;
+    }
     const monthly = Number(bill.monthly) || 0;
     if (monthly <= 0 || bill.dueDay == null) continue;
     const grace = Number(bill.graceDays) || 0;
@@ -73,18 +87,28 @@ export function billsDueForReminder(bills: Bill[], paidByMonth: Record<string, R
       else if (daysUntil === 0) kind = "today";
       else if (daysUntil === -1) kind = "passed";
       else if (grace > 0 && daysUntil === -(grace + 1)) kind = "overdue";
-      if (kind) { due.push({ bill, kind, dueDate }); break; }
+      if (kind) { due.push({ bill, kind, dueDate, amount: monthly }); break; }
     }
   }
   return due;
+}
+
+function biweeklyDebitAhead(bill: Bill, today: Date): Reminder | null {
+  const amount = Number(bill.autopayAmount ?? (Number(bill.monthly) || 0) / 2) || 0;
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(bill.autopayAnchor || "");
+  if (amount <= 0 || !m) return null;
+  const first = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+  const target = new Date(today.getFullYear(), today.getMonth(), today.getDate() + REMINDER_DAYS_AHEAD);
+  const days = daysBetween(first, target);
+  return days >= 0 && days % 14 === 0 ? { bill, kind: "upcoming", dueDate: target, amount } : null;
 }
 
 function money(n: number | undefined) {
   return `$${Math.round(Number(n) || 0).toLocaleString("en-US")}`;
 }
 
-export function reminderMessage({ bill, kind }: Reminder) {
-  const amount = money(bill.monthly);
+export function reminderMessage({ bill, kind, amount: owed }: Reminder) {
+  const amount = money(owed ?? bill.monthly);
   switch (kind) {
     case "upcoming":
       return {

@@ -3,7 +3,11 @@
 // One answer, shared by the Monthly Plan and the Dashboard, to "where does
 // this bill stand this month?" — so the two can never disagree.
 
-import { addPaymentRecord, dueDateInMonth, getPaymentRecord, isoDate, isPaymentSettled, monthKeyOf, updatePaymentRecord } from "./finance";
+import { addPaymentRecord, autopayPerDebit, biweeklyDebitsInMonth, dueDateInMonth, getPaymentRecord, isoDate, isPaymentSettled, monthKeyOf, updatePaymentRecord } from "./finance";
+
+// Lives in finance.js now, beside the running balance and paycheck plan that
+// walk the same schedule; re-exported so existing imports keep working.
+export { biweeklyDebitsInMonth };
 
 export const DUE_SOON_DAYS = 7;
 
@@ -36,28 +40,6 @@ function dollars(n) {
   return Number(n || 0).toLocaleString("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 });
 }
 
-// A biweekly autopay's debit dates that land inside one calendar month,
-// counting forward from its first debit (nothing before that — it hadn't
-// started yet).
-export function biweeklyDebitsInMonth(anchorIso, year, monthIndex) {
-  if (!anchorIso) return [];
-  const monthStart = new Date(year, monthIndex, 1);
-  const monthEnd = new Date(year, monthIndex + 1, 0);
-  const out = [];
-  const d = new Date(anchorIso + "T00:00:00");
-  if (isNaN(d)) return out;
-  if (d < monthStart) {
-    // jump close to the month instead of walking every fortnight since the anchor
-    const steps = Math.floor(daysBetween(d, monthStart) / 14);
-    d.setDate(d.getDate() + steps * 14);
-  }
-  for (let guard = 0; d <= monthEnd && guard < 10; guard++) {
-    if (d >= monthStart) out.push(new Date(d));
-    d.setDate(d.getDate() + 14);
-  }
-  return out;
-}
-
 // Where `bill` stands for the month (year, monthIndex), as of `today`.
 //
 //   ✅ Paid       — regular payments (not extras) cover what's owed. A
@@ -87,7 +69,7 @@ export function getBillStatus(bill, monthEntry, year, monthIndex, today = new Da
     // Autopay that lands every other week: what's owed this month is that
     // month's actual debits (two, sometimes three), and each one counts as
     // paid once its date passes.
-    const per = Number(bill.autopayAmount ?? monthly / 2) || 0;
+    const per = autopayPerDebit(bill);
     const debits = biweeklyDebitsInMonth(bill.autopayAnchor, year, monthIndex);
     owed = per * debits.length;
     const passed = debits.filter((d) => d <= t);

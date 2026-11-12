@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 import {
-  computeRunningBalance, computeAllRunningBalances, autopayDebitsSince, allocateMaxCashFlow, allocateExtra, minimumAdjustedDebts, fastestStrategyForBoost,
+  computeRunningBalance, computeAllRunningBalances, autopayDebitsSince, allocateMaxCashFlow, allocateExtra, fastestStrategyForBoost,
+  projectPayoff, monthlyOutflow, scheduledPayments,
   getPaymentRecord, clearPaymentRecord, addExtraPayments, removeExtraBatch, latestExtraBatch,
   suggestExtraAllocation, buildPaycheckPlan, simulatePayoff, derivedBillExpenses, isoDate,
 } from "./finance";
@@ -116,27 +117,6 @@ describe("allocateExtra", () => {
   });
 });
 
-describe("minimumAdjustedDebts", () => {
-  it("subtracts the full minimum when nothing's been paid this month", () => {
-    expect(minimumAdjustedDebts([card()], {})[0].balance).toBe(950);
-  });
-
-  it("subtracts only the unpaid remainder of this month's minimum", () => {
-    const month = { c: { payments: [{ id: "p", amount: 30, date: "2026-10-02" }] } };
-    expect(minimumAdjustedDebts([card()], month)[0].balance).toBe(980);
-  });
-
-  it("subtracts nothing once the minimum is paid", () => {
-    const month = { c: { payments: [{ id: "p", amount: 50, date: "2026-10-02" }] } };
-    expect(minimumAdjustedDebts([card()], month)[0].balance).toBe(1000);
-  });
-
-  it("doesn't count an extra payment toward the minimum", () => {
-    const month = { c: { payments: [{ id: "x", amount: 200, date: "2026-10-02", kind: "extra" }] } };
-    expect(minimumAdjustedDebts([card()], month)[0].balance).toBe(950);
-  });
-});
-
 describe("fastestStrategyForBoost", () => {
   it("lets a later strategy win when the first one never reaches debt-free", () => {
     // Tiered pays the big 0% loan first while the small 30% card (minimum
@@ -203,17 +183,24 @@ describe("payment records with extras", () => {
 });
 
 describe("suggestExtraAllocation", () => {
-  it("works from today's balances and only this month's unpaid minimums", () => {
-    const debts = [card({ id: "a", name: "A", balance: 160, monthly: 60 })];
-    const month = { a: { payments: [{ id: "p", amount: 60, date: "2026-10-02" }] } };
-    // Minimum already paid: all $160 still needs extra money.
-    const paid = suggestExtraAllocation({ amount: 500, debts, monthEntry: month });
-    expect(paid.cashFlow.rows[0]).toMatchObject({ id: "a", applied: 160, newBalance: 0, paidOff: true });
-    expect(paid.cashFlow.leftover).toBeCloseTo(340, 6);
-    // Minimum still unpaid: it covers $60 of it, so only $100 needs extra.
-    const unpaid = suggestExtraAllocation({ amount: 500, debts, monthEntry: {} });
-    expect(unpaid.cashFlow.rows[0].applied).toBe(100);
-    expect(unpaid.interestCost.leftover).toBeCloseTo(400, 6);
+  it("clears a debt with its whole payoff as of today, paid this month or not", () => {
+    const debts = [card({ id: "a", name: "A", balance: 160, monthly: 60, autopay: true })];
+    const s = suggestExtraAllocation({ amount: 500, debts });
+    expect(s.cashFlow.rows[0]).toMatchObject({ id: "a", applied: 160, newBalance: 0, paidOff: true, autopay: true });
+    expect(s.cashFlow.leftover).toBeCloseTo(340, 6);
+    expect(s.interestCost.leftover).toBeCloseTo(340, 6);
+  });
+
+  it("won't call a debt paid off when the amount only covers the balance after its last payment", () => {
+    // $1,000 at 0.1%/day, last paid 10 days ago: payoff today is $1,010.
+    const pbm = { "2026-11": { c: { payments: [{ id: "p", amount: 50, date: "2026-11-02" }] } } };
+    const d = card({ balance: 1050, balanceAsOf: "2026-11-02", apr: 36.5 });
+    const rb = computeAllRunningBalances([d], pbm, new Date(2026, 10, 12)).c;
+    expect(rb.balance).toBeCloseTo(1060.5, 6); // 1050 + 10 days × $1.05
+    const s = suggestExtraAllocation({ amount: 1050, debts: [{ ...d, balance: rb.balance }] });
+    // $1,050 doesn't clear a $1,060.50 payoff — $10.50 is still owed.
+    expect(s.cashFlow.rows[0]).toMatchObject({ paidOff: false, newBalance: 10.5 });
+    expect(s.cashFlow.freedMonthly).toBe(0);
   });
 });
 
@@ -311,5 +298,99 @@ describe("payoff good through a statement date", () => {
     const auto = { ...debt, autopay: true, autopayFrequency: "monthly" };
     expect(autopayDebitsSince(auto, {}, new Date(2026, 10, 2))).toEqual([]);
     expect(autopayDebitsSince(auto, {}, new Date(2026, 10, 29)).map((p) => p.date)).toEqual(["2026-11-28"]);
+  });
+});
+
+// MK Upstart as it really is: $16,619 payoff on 8/22/26, 25.04% APR, $450
+// monthly payment, autopay $250 every 2 weeks from 8/24/26. Upstart said the
+// payoff on 11/12/26 was $16,033.
+const upstart = (over = {}) => ({
+  id: "mk", name: "MK Upstart", balance: 16619, apr: 25.04, monthly: 450, dueDay: 27, graceDays: 0,
+  balanceAsOf: "2026-08-22", autopay: true, autopayFrequency: "biweekly", autopayAnchor: "2026-08-24", autopayAmount: 250, ...over,
+});
+const nov12 = new Date(2026, 10, 12);
+
+describe("payoff as of a date", () => {
+  it("matches the lender's payoff for MK Upstart: six debits plus interest since the last one", () => {
+    const p = projectPayoff(upstart(), {}, nov12, nov12);
+    expect(p.paymentsApplied).toBe(6);
+    expect(p.lastPaymentDate).toBe("2026-11-02");
+    expect(p.daysOfInterest).toBe(10);
+    expect(p.interestSinceLastPayment).toBeGreaterThan(100);
+    expect(Math.abs(p.payoff - 16033)).toBeLessThan(10);
+  });
+
+  it("is the figure every page uses for what's owed today", () => {
+    expect(computeAllRunningBalances([upstart()], {}, nov12).mk.balance).toBeCloseTo(projectPayoff(upstart(), {}, nov12, nov12).payoff, 6);
+  });
+
+  it("counts the scheduled debits for a future date", () => {
+    const dec1 = projectPayoff(upstart(), {}, new Date(2026, 11, 1), nov12);
+    expect(dec1.scheduledCount).toBe(2); // Nov 16 and Nov 30
+    expect(dec1.scheduledTotal).toBe(500);
+    expect(dec1.payoff).toBeLessThan(projectPayoff(upstart(), {}, nov12, nov12).payoff);
+  });
+
+  it("assumes a hand-paid bill's unpaid regular payments on their due dates", () => {
+    const d = card({ apr: 0, balanceAsOf: "2026-11-01", dueDay: 20, monthly: 100 });
+    const today = new Date(2026, 10, 12);
+    expect(scheduledPayments(d, {}, today, new Date(2027, 0, 31)).map((p) => [p.date, p.amount, !!p.assumed]))
+      .toEqual([["2026-11-20", 100, true], ["2026-12-20", 100, true], ["2027-01-20", 100, true]]);
+    // November already paid in part: only the rest is assumed.
+    const pbm = { "2026-11": { c: { payments: [{ id: "p", amount: 40, date: "2026-11-05" }] } } };
+    expect(scheduledPayments(d, pbm, today, new Date(2026, 10, 30))[0].amount).toBe(60);
+    expect(projectPayoff(d, pbm, new Date(2027, 0, 31), today).payoff).toBe(1000 - 40 - 60 - 100 - 100);
+  });
+
+  it("a payment dated next week doesn't lower today's payoff yet", () => {
+    const d = card({ apr: 0, balanceAsOf: "2026-11-01" });
+    const pbm = { "2026-11": { c: { payments: [{ id: "p", amount: 300, date: "2026-11-19" }] } } };
+    expect(projectPayoff(d, pbm, nov12, nov12).payoff).toBe(1000);
+    expect(projectPayoff(d, pbm, new Date(2026, 10, 19), nov12).payoff).toBe(700);
+  });
+
+  it("is null without a payoff entered", () => {
+    expect(projectPayoff(card({ balance: null }), {}, nov12, nov12)).toBeNull();
+  });
+});
+
+describe("biweekly autopay and hand-logged payments", () => {
+  it("one $250 logged in a two-debit month stands in for one debit, not both", () => {
+    const pbm = { "2026-10": { mk: { payments: [{ id: "m", amount: 250, date: "2026-10-05" }] } } };
+    const debits = autopayDebitsSince(upstart(), pbm, nov12).map((x) => x.date);
+    expect(debits).toEqual(["2026-08-24", "2026-09-07", "2026-09-21", "2026-10-19", "2026-11-02"]);
+    // Same six payments of money either way, so the same payoff.
+    expect(computeAllRunningBalances([upstart()], pbm, nov12).mk.balance).toBeCloseTo(computeAllRunningBalances([upstart()], {}, nov12).mk.balance, 6);
+  });
+
+  it("the paycheck plan counts a logged payment and a passed debit as the same money", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(2026, 10, 12, 9));
+    // Payday Oct 30, so the Nov 2 debit comes out of a check in view.
+    const income = [{ id: "i", name: "Pay", amount: 3000, nextPayDate: "2026-10-30", frequency: "biweekly" }];
+    const bill = { id: "mk", name: "MK Upstart", monthly: 450, autopay: true, autopayFrequency: "biweekly", autopayAnchor: "2026-08-24", autopayAmount: 250 };
+    const pbm = { "2026-11": { mk: { payments: [{ id: "m", amount: 250, date: "2026-11-02" }] } } };
+    const plan = buildPaycheckPlan(income, [bill], 40, pbm, {}, 0);
+    const items = plan.paychecks.flatMap((p) => p.items).filter((it) => it.billId === "mk");
+    const paidInNov = items.filter((it) => it.paid).reduce((s, it) => s + it.amount, 0);
+    expect(paidInNov).toBe(250); // the Nov 2 debit once, not $500
+    // Nov 16 and Nov 30 are still planned in full.
+    expect(items.filter((it) => !it.paid && it.dueDate.getMonth() === 10).map((it) => it.amount)).toEqual([250, 250]);
+    vi.useRealTimers();
+  });
+});
+
+describe("monthlyOutflow", () => {
+  it("is what actually leaves the account: 26 debits a year for biweekly autopay", () => {
+    expect(monthlyOutflow(upstart())).toBeCloseTo(541.67, 2);
+    expect(monthlyOutflow({ monthly: 450 })).toBe(450);
+    expect(monthlyOutflow({ monthly: 450, autopay: true, autopayFrequency: "monthly" })).toBe(450);
+  });
+
+  it("drives cash freed by a payoff and the projection's pace", () => {
+    const { freedMonthly } = allocateMaxCashFlow([upstart({ balance: 1000 })], 1000);
+    expect(freedMonthly).toBeCloseTo(541.67, 2);
+    // $1,000 at 0%: 2 months at the real $541.67/mo, where $450/mo would take 3.
+    expect(simulatePayoff([upstart({ balance: 1000, apr: 0 })], 0, [], "tiered").freedomMonth).toBe(2);
   });
 });

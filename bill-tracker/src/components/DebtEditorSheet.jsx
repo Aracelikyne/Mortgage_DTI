@@ -2,10 +2,11 @@ import { useState } from "react";
 import Sheet, { SheetAction } from "./ui/Sheet";
 import AutopayFields from "./AutopayFields";
 import ReviewSection from "./ReviewSection";
+import PayoffCalculator from "./PayoffCalculator";
 import { autopayDraft, autopayIncomplete, autopayPatch } from "../utils/autopay";
-import { ListSection, NumberField, SelectField, SwitchRow, TextField } from "./ui/List";
+import { ListRow, ListSection, NumberField, SelectField, SwitchRow, TextField } from "./ui/List";
 import { CATEGORY_OPTIONS, PRIORITY_OPTIONS } from "../data/constants";
-import { balanceAnchorOf, isoDate, money } from "../utils/finance";
+import { balanceAnchorOf, isoDate, money, projectPayoff } from "../utils/finance";
 import { needsInfo } from "../utils/statementSync";
 import { asInput, fromInput, shortDate } from "../utils/format";
 
@@ -15,12 +16,14 @@ function categoryValueOf(d) {
 
 // Add or edit one debt — everything the old spreadsheet row held, as an iOS
 // form. Changes apply on Done, as one edit (and one activity-log entry),
-// not a save per keystroke. `runningBalance` is where the balance actually
-// stands today once payments since the payoff's as-of date are counted.
-// Changing the payoff restamps it as updated today by `userName`, so only
-// payments after today come off the new figure.
-export default function DebtEditorSheet({ debt, runningBalance, paymentsApplied = 0, growing, userName, onSave, onArchive, onClose, categoryPatch }) {
+// not a save per keystroke. "Payoff today" is worked out live from the
+// draft — the entered payoff rolled forward through every payment since its
+// as-of date, plus interest since the last one — and is the same figure the
+// rest of the app uses. Changing the payoff restamps it as updated today by
+// `userName`, so only payments after today come off the new figure.
+export default function DebtEditorSheet({ debt, growing, paidByMonth, userName, onSave, onArchive, onClose, categoryPatch }) {
   const isNew = !debt;
+  const [showCalculator, setShowCalculator] = useState(false);
   const [draft, setDraft] = useState(() => ({
     name: debt?.name || "",
     type: debt?.type || "Credit Card",
@@ -43,9 +46,24 @@ export default function DebtEditorSheet({ debt, runningBalance, paymentsApplied 
 
   const valid = draft.name.trim() !== "" && (!isNew || draft.monthly !== "") && !autopayIncomplete(draft);
 
+  const draftBalance = fromInput(draft.balance);
+  const payoffChanged = isNew || String(draftBalance ?? "") !== String(debt.balance ?? "");
+  const draftAsOf = payoffChanged ? isoDate(new Date()) : balanceAnchorOf(debt);
+  // The debt as it would be saved, for the live payoff and the calculator.
+  const liveDebt = {
+    ...(debt || {}),
+    id: debt?.id ?? "new",
+    balance: draftBalance,
+    balanceAsOf: draftAsOf,
+    apr: fromInput(draft.apr),
+    monthly: fromInput(draft.monthly, 0),
+    dueDay: fromInput(draft.dueDay),
+    ...autopayPatch(draft),
+  };
+  const payoffToday = projectPayoff(liveDebt, paidByMonth || {}, new Date(), new Date());
+
   function save() {
-    const balance = fromInput(draft.balance);
-    const payoffChanged = isNew || String(balance ?? "") !== String(debt.balance ?? "");
+    const balance = draftBalance;
     onSave({
       name: draft.name.trim(),
       type: draft.type,
@@ -63,8 +81,6 @@ export default function DebtEditorSheet({ debt, runningBalance, paymentsApplied 
     });
   }
 
-  const showRunning = !isNew && runningBalance !== null && runningBalance !== undefined
-    && (Math.abs(runningBalance - Number(debt.balance || 0)) >= 0.5 || growing);
   const missing = needsInfo({ balance: fromInput(draft.balance), apr: fromInput(draft.apr) });
 
   return (
@@ -83,21 +99,33 @@ export default function DebtEditorSheet({ debt, runningBalance, paymentsApplied 
               {isNew
                 ? "The payoff is what you owe today; every payment logged after today comes off it, interest included."
                 : <>Payoff last updated {shortDate(debt.balanceUpdatedAt || balanceAnchorOf(debt))}{debt.balanceUpdatedBy ? ` by ${debt.balanceUpdatedBy}` : ""}. It includes payments through {shortDate(balanceAnchorOf(debt))}; payments after that come off automatically, interest included.</>}
-              {showRunning && (
-                <span className={growing ? "tone-red" : "tone-green"}>
-                  {" "}{growing ? "Growing — " : "Now "}{money(runningBalance)} after {paymentsApplied} payment{paymentsApplied === 1 ? "" : "s"}{growing ? " (payments aren't covering the interest)" : ""}.
-                </span>
-              )}
+              {payoffToday && payoffToday.paymentsApplied > 0 && <> Payoff today counts {payoffToday.paymentsApplied} payment{payoffToday.paymentsApplied === 1 ? "" : "s"} since then. It's what Extra money uses to pay a debt off completely.</>}
+              {growing && <span className="tone-red"> Growing — payments aren't covering the interest.</span>}
               {missing.length > 0 && <span className="tone-red"> Needs info: {missing.join(" and ")}.</span>}
             </>
           )}
         >
           <NumberField label="Monthly payment" value={draft.monthly} onChange={set("monthly")} placeholder="required" />
-          <NumberField label="Payoff" value={draft.balance} onChange={set("balance")} placeholder="Needs info" />
+          <NumberField label={`Payoff as of ${shortDate(draftAsOf)}`} value={draft.balance} onChange={set("balance")} placeholder="Needs info" />
           <NumberField label="APR %" value={draft.apr} onChange={set("apr")} placeholder="Needs info" />
           <NumberField label="Due day of month" value={draft.dueDay} onChange={set("dueDay")} placeholder="optional" min="1" max="31" step="1" />
           <NumberField label="Grace period (days)" value={draft.graceDays} onChange={set("graceDays")} placeholder="0" min="0" step="1" />
+          {payoffToday && (
+            <ListRow
+              title="Payoff today"
+              subtitle={payoffToday.interestSinceLastPayment >= 0.5 ? `Includes ${money(payoffToday.interestSinceLastPayment)} interest since ${payoffToday.lastPaymentDate ? "the last payment" : shortDate(payoffToday.asOf)}` : undefined}
+              detail={<span className={`num ${growing ? "tone-red" : "tone-green"}`}>{money(payoffToday.payoff)}</span>}
+            />
+          )}
+          <ListRow
+            title="Payoff calculator"
+            className="tone-link"
+            accessory="chevron"
+            aria-expanded={showCalculator}
+            onClick={() => setShowCalculator((v) => !v)}
+          />
         </ListSection>
+        {showCalculator && <PayoffCalculator debt={liveDebt} paidByMonth={paidByMonth || {}} />}
 
         <ListSection footer="Counting toward the goal includes it in the debt-free date. Split-friendly bills can be divided across a month's paychecks with no real downside.">
           <SwitchRow label="Count toward debt-free goal" checked={draft.inGoal} onChange={set("inGoal")} />

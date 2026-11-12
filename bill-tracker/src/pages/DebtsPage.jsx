@@ -5,14 +5,14 @@ import DebtEditorSheet from "../components/DebtEditorSheet";
 import Sheet, { SheetAction } from "../components/ui/Sheet";
 import { ListRow, ListSection } from "../components/ui/List";
 import { TIERS } from "../data/constants";
-import { balanceAnchorOf, fmtDate, isUnderwater, money, willNeverGetExtra } from "../utils/finance";
+import { balanceAnchorOf, fmtDate, isUnderwater, money, monthlyOutflow, willNeverGetExtra } from "../utils/finance";
 import BillBadges from "../components/BillBadges";
 import DuplicatesBanner from "../components/DuplicatesBanner";
-import { ordinal, shortDate } from "../utils/format";
+import { ordinal, paymentSummary, shortDate } from "../utils/format";
 import { useHouseholdContext } from "../state/HouseholdContext";
 
-// Debts as list rows grouped by payoff tier — name, today's balance,
-// monthly payment and APR at a glance — each opening an edit sheet.
+// Debts as list rows grouped by payoff tier — name, today's payoff,
+// what it actually costs a month and APR at a glance — each opening an edit sheet.
 export default function DebtsPage() {
   const h = useHouseholdContext();
   const [editing, setEditing] = useState(null); // a debt, or "new"
@@ -44,14 +44,14 @@ export default function DebtsPage() {
         )}
         subtitle={(
           <>
-            {[d.type, d.dueDay ? `due the ${ordinal(d.dueDay)}` : null, growing ? "growing" : null].filter(Boolean).join(" · ")}
+            {[d.type, d.autopay && d.autopayFrequency === "biweekly" ? "autopay every 2 weeks" : d.dueDay ? `due the ${ordinal(d.dueDay)}` : null, growing ? "growing" : null].filter(Boolean).join(" · ")}
             <span className="row-tracker">Payoff updated {shortDate(d.balanceUpdatedAt || balanceAnchorOf(d))}{d.balanceUpdatedBy ? ` · by ${d.balanceUpdatedBy}` : ""}</span>
           </>
         )}
         detail={(
           <span className="row-amounts">
             <span className={`num row-amount-main ${growing ? "tone-red" : ""}`}>{hasBalance ? money(running) : "—"}</span>
-            <span className="num row-amount-sub">{money(Number(d.monthly || 0))}/mo{d.apr !== null && d.apr !== undefined && d.apr !== "" ? ` · ${Number(d.apr)}%` : ""}</span>
+            <span className="num row-amount-sub">{paymentSummary(d)}{d.apr !== null && d.apr !== undefined && d.apr !== "" ? ` · ${Number(d.apr)}%` : ""}</span>
           </span>
         )}
         onClick={() => setEditing(d)}
@@ -79,7 +79,7 @@ export default function DebtsPage() {
         {h.tierGroups.map(({ tier, items }) => {
           if (items.length === 0) return null;
           const balance = items.reduce((s, d) => s + h.runningBalanceOf(d), 0);
-          const monthly = items.reduce((s, d) => s + Number(d.monthly || 0), 0);
+          const monthly = items.reduce((s, d) => s + monthlyOutflow(d), 0);
           return (
             <ListSection
               key={tier}
@@ -94,7 +94,7 @@ export default function DebtsPage() {
         {h.protectedGroup.length > 0 && (
           <ListSection
             header={<><Lock size={12} className="inline-icon" />Minimum only, forever</>}
-            headerDetail={<span className="num">{money(h.protectedGroup.reduce((s, d) => s + Number(d.monthly || 0), 0))}/mo</span>}
+            headerDetail={<span className="num">{money(h.protectedGroup.reduce((s, d) => s + monthlyOutflow(d), 0))}/mo</span>}
             footer="These count toward your DTI and never get extra payments. Turn on “Count toward debt-free goal” if you want one in your debt-free date — it needs a balance to be projectable."
           >
             {h.protectedGroup.map(debtRow)}
@@ -123,9 +123,8 @@ export default function DebtsPage() {
       {editing && (
         <DebtEditorSheet
           debt={editingDebt}
-          runningBalance={editingDebt ? h.runningBalances[editingDebt.id]?.balance : null}
           growing={editingDebt ? isGrowing(editingDebt) : false}
-          paymentsApplied={editingDebt ? h.runningBalances[editingDebt.id]?.paymentsApplied || 0 : 0}
+          paidByMonth={h.paidByMonth}
           userName={h.userName}
           categoryPatch={h.categoryPatch}
           onSave={(fields) => (editingDebt ? h.updateDebt(editingDebt.id, fields) : h.addDebt(fields))}

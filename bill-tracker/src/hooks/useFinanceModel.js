@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { buildPaycheckPlan, computeAllRunningBalances, latestExtraBatch, monthLabelFull, simulatePayoff } from "../utils/finance";
+import { buildPaycheckPlan, computeAllRunningBalances, latestExtraBatch, monthLabelFull, monthlyOutflow, simulatePayoff } from "../utils/finance";
 
 export function tierOf(d) {
   const t = Number(d.priority);
@@ -11,11 +11,12 @@ export function tierOf(d) {
 export function useFinanceModel(h) {
   const { debts, fixed, paidOffDebts, paidByMonth, income, includeRent, mortgageEstimate, netIncome, recurringExtra, boosts, strategy, targetDTI, incomeSources, paycheckOverrides, paycheckReserve, debtBaseline, setDebtBaseline } = h;
 
-  // Balances are computed, not the raw stored figure: each account's stored
-  // balance is a fixed anchor (accurate as of BALANCE_ANCHOR_DATE), and
-  // every payment dated after that anchor is split into interest/principal
-  // and rolled forward from there. This is what actually moves the wall,
-  // the stat cards, and the payoff projection as payments come in.
+  // Balances are each debt's payoff as of today, not the raw stored figure:
+  // the stored payoff is accurate as of its own as-of date, every payment
+  // since is split into interest/principal and rolled forward, and the
+  // interest built up since the last payment is added on top. This is what
+  // moves the wall, the stat cards, the payoff projection and the Extra
+  // money suggestions as payments come in.
   const runningBalances = useMemo(() => computeAllRunningBalances(debts, paidByMonth), [debts, paidByMonth]);
   const debtsWithRunningBalance = useMemo(
     () => debts.map((d) => {
@@ -33,7 +34,11 @@ export function useFinanceModel(h) {
   // Everything that's due each month — what the Monthly Plan and the
   // Dashboard's "This month" card track.
   const monthlyBills = useMemo(() => [...debtBills, ...fixed], [debtBills, fixed]);
+  // Contractual monthly payments — what a lender counts for DTI.
   const totalDebtMonthly = debtBills.reduce((s, d) => s + Number(d.monthly || 0), 0);
+  // What actually leaves the account in an average month. Differs from the
+  // above only for biweekly autopay (26 debits a year — see monthlyOutflow).
+  const totalDebtOutflow = debtBills.reduce((s, d) => s + monthlyOutflow(d), 0);
   const totalDebtBalance = debtBills.reduce((s, d) => s + Number(d.balance || 0), 0);
   const rentMonthly = fixed.find((f) => f.type === "Rent/Mortgage")?.monthly || 0;
   const dtiNumerator = totalDebtMonthly + (includeRent ? rentMonthly : 0);
@@ -45,9 +50,9 @@ export function useFinanceModel(h) {
   const dtiBand = dti === null ? null : dti <= 36 ? "good" : dti <= 43 ? "watch" : "over";
   const dtiBandLabel = { good: "Within typical guidelines", watch: "Near the common ceiling", over: "Above the common ceiling" }[dtiBand] || "";
 
-  const totalFixedMonthly = fixed.reduce((s, f) => s + Number(f.monthly || 0), 0);
+  const totalFixedMonthly = fixed.reduce((s, f) => s + monthlyOutflow(f), 0);
   const netIncomeNum = netIncome === "" ? null : Number(netIncome);
-  const availableAfterBills = netIncomeNum !== null ? netIncomeNum - totalDebtMonthly - totalFixedMonthly : null;
+  const availableAfterBills = netIncomeNum !== null ? netIncomeNum - totalDebtOutflow - totalFixedMonthly : null;
 
   const sim = useMemo(
     () => simulatePayoff(debtsWithRunningBalance, Number(recurringExtra) || 0, boosts, strategy, { income, targetDTI: Number(targetDTI) || null, mortgageEstimate: Number(mortgageEstimate) || 0 }),
@@ -106,7 +111,7 @@ export function useFinanceModel(h) {
 
   return {
     runningBalances, runningBalanceOf, debtsWithRunningBalance, debtBills, monthlyBills,
-    totalDebtMonthly, totalDebtBalance, totalFixedMonthly, rentMonthly,
+    totalDebtMonthly, totalDebtOutflow, totalDebtBalance, totalFixedMonthly, rentMonthly,
     dti, trueDti, dtiBand, dtiBandLabel, netIncomeNum, availableAfterBills,
     sim, chartData, debtFreeLabel, fullDebtFreeLabel, dtiTargetLabel, dtiWithMortgageTargetLabel, hasExcludedWithBalance,
     lastExtraBatch, billNameById, paycheckPlan,
