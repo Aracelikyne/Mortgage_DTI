@@ -5,7 +5,7 @@ import DtiGauge from "../components/DtiGauge";
 import SuggestionLens from "../components/SuggestionLens";
 import SegmentedControl from "../components/ui/SegmentedControl";
 import { ListSection, ListRow, NumberField, SwitchRow } from "../components/ui/List";
-import { fmtDate, money, monthKeyOf, monthLabelFull, pct, suggestExtraAllocation } from "../utils/finance";
+import { fmtDate, money, monthLabelFull, pct, suggestExtraAllocation } from "../utils/finance";
 import { useHouseholdContext } from "../state/HouseholdContext";
 
 const STRATEGIES = [
@@ -25,18 +25,16 @@ export default function BudgetPage() {
   // Only the amount that was submitted is state — the suggestion itself is
   // derived from current data, so it never shows yesterday's numbers.
   const [submittedExtra, setSubmittedExtra] = useState(null);
-  const currentMonthKey = monthKeyOf(new Date());
   const suggestion = useMemo(
     () => (submittedExtra > 0
       ? suggestExtraAllocation({
           amount: submittedExtra,
           debts: h.debtsWithRunningBalance,
-          monthEntry: h.paidByMonth[currentMonthKey] || {},
           recurringExtra: Number(h.recurringExtra) || 0,
           boosts: h.boosts,
         })
       : null),
-    [submittedExtra, h.debtsWithRunningBalance, h.paidByMonth, currentMonthKey, h.recurringExtra, h.boosts]
+    [submittedExtra, h.debtsWithRunningBalance, h.recurringExtra, h.boosts]
   );
 
   function changeExtraAmount(value) {
@@ -67,7 +65,11 @@ export default function BudgetPage() {
         >
           <NumberField label="Gross monthly income" value={h.income} onChange={(v) => h.setIncome(Number(v))} />
           <NumberField label="Net take-home pay" value={h.netIncome} placeholder="after taxes" onChange={h.setNetIncome} />
-          <ListRow title="Monthly debt payments" detail={<span className="num">{money(h.totalDebtMonthly)}</span>} />
+          <ListRow
+            title="Monthly debt payments"
+            subtitle={Math.abs(h.totalDebtOutflow - h.totalDebtMonthly) >= 0.5 ? `What actually goes out. DTI uses the ${money(h.totalDebtMonthly)} contractual payments.` : undefined}
+            detail={<span className="num">{money(h.totalDebtOutflow)}</span>}
+          />
           <ListRow title="Fixed expenses" detail={<span className="num">{money(h.totalFixedMonthly)}</span>} />
           {h.netIncomeNum !== null && (
             <ListRow
@@ -136,9 +138,9 @@ export default function BudgetPage() {
             </div>
           </div>
           <p className="muted small">
-            Where this specific amount does the most good, three ways at once, using each debt's balance as of today.
-            Whatever's still unpaid of this month's minimum is treated as already spoken for, so only what's owed beyond it
-            counts as needing extra dollars. "Apply this" logs the money as extra payments dated today — they show on the
+            Where this specific amount does the most good, three ways at once. A debt only counts as paid off when the
+            amount covers its full payoff as of today — the balance plus the interest built up since its last payment — so
+            nothing is left behind. "Apply this" logs the money as extra payments dated today — they show on the
             Monthly Plan (where each can be deleted), the Paycheck Plan and Expenses, and never count as a bill's regular payment.
           </p>
 

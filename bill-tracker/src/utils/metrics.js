@@ -130,7 +130,7 @@ export function dashboardMetrics(h) {
       caption: h.availableAfterBills < 0 ? "Bills cost more than take-home" : "Left after every bill",
       details: [
         { title: "What it shows", text: "What's left of your take-home pay each month after every debt minimum and fixed expense. A negative number means the bills add up to more than you bring home." },
-        { title: "How it's calculated", text: `${money(h.netIncomeNum)} take-home − ${money(h.totalDebtMonthly)} debt payments − ${money(h.totalFixedMonthly)} fixed expenses = ${money(h.availableAfterBills)}.` },
+        { title: "How it's calculated", text: `${money(h.netIncomeNum)} take-home − ${money(h.totalDebtOutflow)} debt payments − ${money(h.totalFixedMonthly)} fixed expenses = ${money(h.availableAfterBills)}. Bills on autopay every 2 weeks count as 26 debits a year, what actually leaves the account.` },
       ],
       actions: [{ label: "Change take-home pay", page: "budget" }, { label: "Edit fixed expenses", page: "fixed" }],
     }] : []),

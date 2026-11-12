@@ -15,12 +15,19 @@ const FREQUENCIES = [
 // `draft` holds string inputs: autopay, autopayFrequency, autopayAnchor, autopayAmount.
 export default function AutopayFields({ draft, set, monthly }) {
   const biweekly = draft.autopayFrequency === "biweekly";
+  // A biweekly debit that isn't half the monthly payment takes out more (or
+  // less) than "monthly" says — MK Upstart's $250 every 2 weeks is ≈$541.67
+  // a month against $450. Say so where both numbers are typed.
+  const perDebit = draft.autopayAmount !== "" && draft.autopayAmount !== null ? Number(draft.autopayAmount) : Number(monthly || 0) / 2;
+  const actualMonthly = (perDebit * 26) / 12;
+  const gap = actualMonthly - Number(monthly || 0);
+  const cents = (n) => Math.abs(n).toLocaleString("en-US", { style: "currency", currency: "USD" });
   return (
     <ListSection
       header="Autopay"
       footer={draft.autopay
         ? (biweekly
-          ? "Repeats every 14 days from the first debit, so it keeps landing on the same weekday. The monthly amount still drives interest and payoff math — these two fields drive the paycheck plan and this month's status."
+          ? "Repeats every 14 days from the first debit, so it keeps landing on the same weekday, and the due day above is ignored. These debits — 26 a year — are what the balance, payoff, budget, paycheck plan and reminders use. The monthly amount above only counts toward DTI."
           : "Debits on this bill's due day each month. It counts as paid once that day passes, and never shows as past due.")
         : "Turn on if this bill debits itself automatically, so the app doesn't wait on a manual payment."}
     >
@@ -33,7 +40,13 @@ export default function AutopayFields({ draft, set, monthly }) {
           {biweekly && (
             <>
               <TextField label="First debit date" type="date" value={draft.autopayAnchor} onChange={set("autopayAnchor")} />
-              <NumberField label="Amount per debit" value={draft.autopayAmount} placeholder={monthly ? String(Number(monthly) / 2) : ""} onChange={set("autopayAmount")} />
+              <NumberField
+                label="Amount per debit"
+                value={draft.autopayAmount}
+                placeholder={monthly ? String(Number(monthly) / 2) : ""}
+                onChange={set("autopayAmount")}
+                hint={perDebit > 0 ? `≈${cents(actualMonthly)} a month actually debited${Number(monthly) > 0 && Math.abs(gap) >= 0.5 ? ` — ${cents(gap)} ${gap > 0 ? "more" : "less"} than the ${cents(Number(monthly))} monthly amount` : ""}.` : undefined}
+              />
             </>
           )}
         </>

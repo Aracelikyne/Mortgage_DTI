@@ -368,6 +368,7 @@ code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0
 .row-chevron { color: var(--gray3); flex-shrink: 0; margin-right: -4px; }
 .row-action { justify-content: center; gap: 8px; color: var(--tint); }
 .row-action:disabled { color: var(--label-3); }
+.row.tone-link .row-title { color: var(--tint); }
 .row.destructive, .row.destructive .row-title { color: var(--red); }
 .row-amounts { display: flex; flex-direction: column; align-items: flex-end; gap: 1px; }
 .row-amount-main { color: var(--label); font-weight: 600; font-size: 17px; }

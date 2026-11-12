@@ -78,7 +78,7 @@ export function allocateMaxCashFlow(debts, amount) {
       // Weight rounds up so a $100.40 balance never "fits" in $100, but the
       // amount applied is the exact balance — rounding that too used to
       // leave 40¢ behind and report the bill as "continues next month".
-      return { ...d, balance, monthly: Number(d.monthly) || 0, weight: Math.ceil(balance) };
+      return { ...d, balance, monthly: monthlyOutflow(d), weight: Math.ceil(balance) };
     });
 
   // Whole-dollar weights against the amount rounded down can miss a set the
@@ -114,20 +114,6 @@ export function allocateMaxCashFlow(debts, amount) {
   // happened to finish off.
   const freedMonthly = targetable.reduce((s, d) => s + (applied[d.id] >= d.balance - 0.005 ? d.monthly : 0), 0);
   return { applied, leftover: Math.max(0, leftover), freedMonthly };
-}
-
-// This month's minimum payments are already budgeted separately from "extra" money —
-// so before allocating extra, first knock each balance down by whatever's still
-// unpaid of its own minimum this month. A minimum already logged as paid has
-// already lowered the running balance; subtracting it again would count it twice.
-// Only the amount still owed after that counts as needing extra dollars.
-export function minimumAdjustedDebts(debts, monthEntry = {}) {
-  return debts.map((d) => {
-    if (d.isDebt === false || d.balance === null || d.balance === undefined || d.balance <= 0) return d;
-    const paidTowardMinimum = getPaymentRecord(monthEntry, d).amountPaid;
-    const unpaidMinimum = Math.max(0, Number(d.monthly || 0) - paidTowardMinimum);
-    return { ...d, balance: Math.max(0, d.balance - Math.min(unpaidMinimum, d.balance)) };
-  });
 }
 
 export function monthlyInterest(balance, apr) {
@@ -200,42 +186,114 @@ export function computeRunningBalance(debt, allPayments) {
     principalPaid += principal;
   }
 
-  return { balance, principalPaid, isEstimate: !hasApr, growing, paymentsApplied, asOf: balanceAnchorOf(debt) };
+  return { balance, principalPaid, isEstimate: !hasApr, growing, paymentsApplied, asOf: balanceAnchorOf(debt), accruedThrough: isoDate(accruedThrough) };
+}
+
+function dayOf(iso) {
+  return new Date(iso + "T00:00:00");
+}
+
+function startOfDate(d) {
+  const out = new Date(d);
+  out.setHours(0, 0, 0, 0);
+  return out;
+}
+
+// The amount of one biweekly autopay debit. Left blank, it's half the
+// monthly payment.
+export function autopayPerDebit(bill) {
+  return Number(bill?.autopayAmount ?? Number(bill?.monthly || 0) / 2) || 0;
+}
+
+export function isBiweeklyAutopay(bill) {
+  return !!bill?.autopay && bill.autopayFrequency === "biweekly";
+}
+
+// What a bill actually takes out of the account in an average month. For
+// most bills that's the monthly payment. A biweekly autopay debits 26 times
+// a year, so it's the per-debit amount × 26 ÷ 12 — which is NOT the same as
+// the monthly payment typed in (MK Upstart: $250 every 2 weeks ≈ $541.67/mo
+// against a $450 monthly payment). Cash flow, payoff speed and money freed by
+// a payoff all use this; DTI keeps the contractual monthly payment, since
+// that's what a lender counts.
+export function monthlyOutflow(bill) {
+  if (isBiweeklyAutopay(bill)) return (autopayPerDebit(bill) * 26) / 12;
+  return Number(bill?.monthly) || 0;
+}
+
+// A biweekly autopay's debit dates that land inside one calendar month,
+// counting forward from its first debit (nothing before that — it hadn't
+// started yet).
+export function biweeklyDebitsInMonth(anchorIso, year, monthIndex) {
+  if (!anchorIso) return [];
+  const monthStart = new Date(year, monthIndex, 1);
+  const monthEnd = new Date(year, monthIndex + 1, 0);
+  const out = [];
+  const d = dayOf(anchorIso);
+  if (isNaN(d)) return out;
+  if (d < monthStart) {
+    // jump close to the month instead of walking every fortnight since the anchor
+    const steps = Math.floor(Math.round((monthStart - d) / DAY_MS) / 14);
+    d.setDate(d.getDate() + steps * 14);
+  }
+  for (let guard = 0; d <= monthEnd && guard < 10; guard++) {
+    if (d >= monthStart) out.push(new Date(d));
+    d.setDate(d.getDate() + 14);
+  }
+  return out;
+}
+
+// An autopay bill's debits dated after `from` and on or before `to`.
+//
+// A regular payment logged by hand on an autopay bill is the same money as a
+// debit, not more of it — the Monthly Plan counts whichever is larger. So
+// each month's hand-logged total is matched against that month's debits,
+// earliest first, and only what's left of each debit counts here. (This
+// used to drop every debit in a month as soon as anything was logged, so
+// logging one $250 on a biweekly bill erased both of that month's debits.)
+// Debits earlier in `from`'s month are walked too, so the matching is the
+// same whichever window is asked for.
+function autopayDebitsBetween(debt, paidByMonth, from, to) {
+  if (!debt?.autopay) return [];
+  const windowStart = new Date(from.getFullYear(), from.getMonth(), 1);
+  const raw = [];
+  if (isBiweeklyAutopay(debt)) {
+    if (!debt.autopayAnchor) return [];
+    const amount = autopayPerDebit(debt);
+    const d = dayOf(debt.autopayAnchor);
+    if (isNaN(d)) return [];
+    for (let guard = 0; d <= to && guard < 2000; guard++) {
+      if (d >= windowStart) raw.push({ amount, date: new Date(d) });
+      d.setDate(d.getDate() + 14);
+    }
+  } else {
+    if (!debt.dueDay) return [];
+    const cursor = new Date(windowStart);
+    for (let guard = 0; guard < 600; guard++) {
+      const due = dueDateInMonth(Number(debt.dueDay), cursor.getFullYear(), cursor.getMonth());
+      if (due > to) break;
+      raw.push({ amount: Number(debt.monthly || 0), date: due });
+      cursor.setMonth(cursor.getMonth() + 1);
+    }
+  }
+  const credit = new Map();
+  const out = [];
+  for (const { amount, date } of raw) {
+    const mk = monthKeyOf(date);
+    if (!credit.has(mk)) credit.set(mk, getPaymentRecord(paidByMonth?.[mk] || {}, debt).amountPaid);
+    const offset = Math.min(credit.get(mk), amount);
+    credit.set(mk, credit.get(mk) - offset);
+    const left = amount - offset;
+    if (date > from && left > 0.005) out.push({ amount: Math.round(left * 100) / 100, date: isoDate(date), autopay: true });
+  }
+  return out;
 }
 
 // Autopay debits itself with nothing logged by hand, so its debits since
 // the payoff's anchor date count as payments too — otherwise an autopay
-// debt's balance would never move. A month where a regular payment was
-// logged by hand is skipped (that's the same money, recorded manually).
+// debt's balance would never move.
 export function autopayDebitsSince(debt, paidByMonth, today = new Date()) {
-  if (!debt?.autopay) return [];
-  const anchor = new Date(balanceAnchorOf(debt) + "T00:00:00");
-  const end = new Date(today);
-  end.setHours(0, 0, 0, 0);
-  const loggedIn = (date) => {
-    const rec = getPaymentRecord(paidByMonth?.[monthKeyOf(date)] || {}, debt);
-    return rec.regularPayments.some((p) => Number(p.amount) > 0);
-  };
-  const out = [];
-  if (debt.autopayFrequency === "biweekly") {
-    if (!debt.autopayAnchor) return out;
-    const amount = Number(debt.autopayAmount ?? Number(debt.monthly || 0) / 2);
-    const d = new Date(debt.autopayAnchor + "T00:00:00");
-    for (let guard = 0; d <= end && guard < 600; guard++) {
-      if (d > anchor && !loggedIn(d)) out.push({ amount, date: isoDate(d), autopay: true });
-      d.setDate(d.getDate() + 14);
-    }
-    return out;
-  }
-  if (!debt.dueDay) return out;
-  const cursor = new Date(anchor.getFullYear(), anchor.getMonth(), 1);
-  for (let guard = 0; guard < 600; guard++) {
-    const due = dueDateInMonth(Number(debt.dueDay), cursor.getFullYear(), cursor.getMonth());
-    if (due > end) break;
-    if (due > anchor && !loggedIn(due)) out.push({ amount: Number(debt.monthly || 0), date: isoDate(due), autopay: true });
-    cursor.setMonth(cursor.getMonth() + 1);
-  }
-  return out;
+  return autopayDebitsBetween(debt, paidByMonth, dayOf(balanceAnchorOf(debt)), startOfDate(today));
 }
 
 // Flattens every payment recorded anywhere in paidByMonth for one bill,
@@ -243,7 +301,7 @@ export function autopayDebitsSince(debt, paidByMonth, today = new Date()) {
 // history since the anchor, not just whichever month is being viewed.
 export function allPaymentsForBill(paidByMonth, billId) {
   const out = [];
-  for (const [month, monthEntry] of Object.entries(paidByMonth)) {
+  for (const [month, monthEntry] of Object.entries(paidByMonth || {})) {
     const raw = monthEntry[billId];
     if (raw && typeof raw === "object" && Array.isArray(raw.payments)) {
       out.push(...raw.payments.map((p) => ({ ...p, month })));
@@ -257,13 +315,89 @@ export function allPaymentsForBill(paidByMonth, billId) {
   return out;
 }
 
-// Computes the running balance for every debt at once, keyed by id — the
-// shared entry point the UI uses so it's only ever calculated once per
-// render instead of once per place a balance is displayed.
+// Payments still ahead of `from`, through `to`, that a payoff on a future
+// date should count: payments already logged with a later date, autopay
+// debits, and — for a bill paid by hand — whatever's unpaid of each month's
+// regular payment, assumed paid on its due date (or tomorrow, if this
+// month's due date has already slipped by unpaid). Each is tagged so the
+// calculator can say what it assumed.
+export function scheduledPayments(debt, paidByMonth, from, to) {
+  const out = [];
+  for (const p of allPaymentsForBill(paidByMonth, debt.id)) {
+    if (!p.date || !(Number(p.amount) > 0)) continue;
+    const d = dayOf(p.date);
+    if (d > from && d <= to) out.push({ ...p, scheduled: true });
+  }
+  if (debt.autopay) {
+    out.push(...autopayDebitsBetween(debt, paidByMonth, from, to).map((p) => ({ ...p, scheduled: true })));
+  } else if (debt.dueDay && Number(debt.monthly) > 0) {
+    const cursor = new Date(from.getFullYear(), from.getMonth(), 1);
+    const tomorrow = new Date(from);
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    for (let guard = 0; guard < 600; guard++) {
+      const due = dueDateInMonth(Number(debt.dueDay), cursor.getFullYear(), cursor.getMonth());
+      if (due > to) break;
+      const unpaid = Number(debt.monthly) - getPaymentRecord(paidByMonth?.[monthKeyOf(due)] || {}, debt).amountPaid;
+      const date = due > from ? due : tomorrow; // only this month's can be behind `from`
+      if (unpaid > 0.005 && date <= to) out.push({ amount: Math.round(unpaid * 100) / 100, date: isoDate(date), scheduled: true, assumed: true });
+      cursor.setMonth(cursor.getMonth() + 1);
+    }
+  }
+  return out.sort((a, b) => dayOf(a.date) - dayOf(b.date));
+}
+
+// The payoff on `onDate`: the stored payoff rolled forward through every
+// payment since its as-of date (each split into interest and principal),
+// PLUS the interest that's built up since the last payment. A lender's
+// payoff quote includes that interest; the balance right after a payment
+// doesn't — on MK Upstart that's ~$109 ten days after a debit.
+//
+// For today or an earlier date, only payments that have actually happened
+// by then count — a payment scheduled for next week hasn't lowered today's
+// payoff yet. For a future date, scheduled payments (see above) count too.
+// Returns null for a debt with no payoff entered.
+export function projectPayoff(debt, paidByMonth, onDate = new Date(), today = new Date()) {
+  if (debt?.balance === null || debt?.balance === undefined || debt.balance === "") return null;
+  const pbm = paidByMonth || {};
+  const t = startOfDate(today);
+  const target = startOfDate(onDate);
+  const cutoff = target < t ? target : t;
+  const anchor = dayOf(balanceAnchorOf(debt));
+
+  const happened = allPaymentsForBill(pbm, debt.id).filter((p) => p.date && dayOf(p.date) <= cutoff);
+  const debited = autopayDebitsBetween(debt, pbm, anchor, cutoff);
+  const scheduled = target > t ? scheduledPayments(debt, pbm, t, target) : [];
+  const rb = computeRunningBalance(debt, [...happened, ...debited, ...scheduled]);
+
+  const hasApr = debt.apr !== null && debt.apr !== undefined && debt.apr !== "" && Number(debt.apr) > 0;
+  const accruedThrough = dayOf(rb.accruedThrough);
+  const days = Math.max(0, Math.round((target - accruedThrough) / DAY_MS));
+  const interest = hasApr && rb.balance > 0 ? rb.balance * (Number(debt.apr) / 100 / 365) * days : 0;
+  const payoff = rb.balance + interest;
+  return {
+    ...rb,
+    balance: payoff,
+    payoff,
+    onDate: isoDate(target),
+    balanceAfterLastPayment: rb.balance,
+    interestSinceLastPayment: interest,
+    daysOfInterest: days,
+    lastPaymentDate: accruedThrough > anchor ? rb.accruedThrough : null,
+    beforeAsOf: target < anchor,
+    scheduledCount: scheduled.length,
+    scheduledTotal: scheduled.reduce((s, p) => s + Number(p.amount || 0), 0),
+    assumedCount: scheduled.filter((p) => p.assumed).length,
+  };
+}
+
+// Every debt's payoff as of today, keyed by id — the one figure the whole
+// app uses for "what's owed": the Debts list, the wall, the projection and
+// the Extra money suggestions. Calculated once per render instead of once
+// per place it's displayed.
 export function computeAllRunningBalances(debts, paidByMonth, today = new Date()) {
   const result = {};
   for (const d of debts) {
-    result[d.id] = computeRunningBalance(d, [...allPaymentsForBill(paidByMonth, d.id), ...autopayDebitsSince(d, paidByMonth, today)]);
+    result[d.id] = projectPayoff(d, paidByMonth, today, today) || computeRunningBalance(d, []);
   }
   return result;
 }
@@ -319,7 +453,7 @@ export function derivedBillExpenses(debts, fixed, paidByMonth) {
 export function isUnderwater(d) {
   const apr = Number(d.apr) || 0;
   if (apr <= 0) return false;
-  return Number(d.monthly || 0) < monthlyInterest(Number(d.balance || 0), apr);
+  return monthlyOutflow(d) < monthlyInterest(Number(d.balance || 0), apr);
 }
 
 // True for any debt allocateExtra (above) will never send a dollar to —
@@ -342,7 +476,7 @@ export function willNeverGetExtra(d) {
 function payMinimums(working) {
   let freed = 0;
   for (const d of working) {
-    const monthly = Number(d.monthly) || 0;
+    const monthly = monthlyOutflow(d);
     if (d.balance <= 0) {
       freed += monthly;
       continue;
@@ -356,7 +490,7 @@ function payMinimums(working) {
 }
 
 function stuckReason(d) {
-  const monthly = Number(d.monthly) || 0;
+  const monthly = monthlyOutflow(d);
   if (monthly <= 0) return "no monthly payment";
   if (monthly <= monthlyInterest(d.balance, d.apr)) return "its payment doesn't cover the interest";
   return "not paid off within 40 years at this pace";
@@ -478,18 +612,19 @@ function suggestionRows(applied, sourceDebts) {
     .map((d) => {
       const amount = Math.round(applied[d.id] * 100) / 100;
       const newBalance = Math.max(0, Math.round((d.balance - applied[d.id]) * 100) / 100);
-      return { id: d.id, name: d.name, applied: amount, newBalance, paidOff: newBalance <= 0.005 };
+      return { id: d.id, name: d.name, applied: amount, newBalance, paidOff: newBalance <= 0.005, autopay: !!d.autopay };
     });
 }
 
 // "Extra money this month": where one specific amount does the most good,
 // three ways at once. A pure function of current data — the UI recomputes
 // it whenever balances or payments change, so it can't go stale the way a
-// stored suggestion did. `debts` must carry running balances (what's owed
-// today); `monthEntry` is this month's paidByMonth entry, so a minimum
-// that's already been paid isn't subtracted a second time.
-export function suggestExtraAllocation({ amount, debts, monthEntry = {}, recurringExtra = 0, boosts = [] }) {
-  const adjusted = minimumAdjustedDebts(debts, monthEntry);
+// stored suggestion did. `debts` must carry each debt's payoff as of today
+// (computeAllRunningBalances) — that's exactly what it takes to clear one
+// completely today, interest since its last payment included. Paying a debt
+// off also covers whatever's left of its own payment this month.
+export function suggestExtraAllocation({ amount, debts, recurringExtra = 0, boosts = [] }) {
+  const adjusted = debts;
   const cash = allocateMaxCashFlow(adjusted, amount);
   const interest = allocateExtra(adjusted, amount, "avalanche");
   const fastestPick = fastestStrategyForBoost(debts, amount, recurringExtra, boosts);
@@ -828,7 +963,7 @@ export function generateBillInstances(bills, horizonDays) {
       const deadline = new Date(dd);
       deadline.setDate(deadline.getDate() + Number(b.graceDays || 0));
       if (deadline >= today && dd <= horizonEnd) {
-        instances.push({ billId: b.id, name: b.name, amount: Number(b.monthly || 0), dueDate: dd, deadline, graceDays: Number(b.graceDays || 0), splitFriendly: !!b.splitFriendly, autopay: !!b.autopay });
+        instances.push({ billId: b.id, name: b.name, amount: Number(b.monthly || 0), monthOwed: Number(b.monthly || 0), dueDate: dd, deadline, graceDays: Number(b.graceDays || 0), splitFriendly: !!b.splitFriendly, autopay: !!b.autopay });
       }
       cursor.setMonth(cursor.getMonth() + 1);
     }
@@ -851,7 +986,7 @@ export function generateAutopayInstances(bills, horizonDays) {
   const instances = [];
   for (const b of bills) {
     if (!b.autopay || b.autopayFrequency !== "biweekly" || !b.autopayAnchor) continue;
-    const amount = Number(b.autopayAmount ?? Number(b.monthly || 0) / 2);
+    const amount = autopayPerDebit(b);
     if (!(amount > 0)) continue;
     let d = new Date(b.autopayAnchor + "T00:00:00");
     let guard = 0;
@@ -865,7 +1000,8 @@ export function generateAutopayInstances(bills, horizonDays) {
     const mostRecentPast = occurrences.filter((dt) => dt < today).sort((a, c) => c - a)[0];
     const chosen = mostRecentPast ? [mostRecentPast, ...future] : future;
     for (const dt of chosen) {
-      instances.push({ billId: b.id, name: b.name, amount, dueDate: dt, deadline: dt, graceDays: 0, splitFriendly: false, autopay: true });
+      const monthOwed = amount * biweeklyDebitsInMonth(b.autopayAnchor, dt.getFullYear(), dt.getMonth()).length;
+      instances.push({ billId: b.id, name: b.name, amount, monthOwed, dueDate: dt, deadline: dt, graceDays: 0, splitFriendly: false, autopay: true });
     }
   }
   instances.sort((a, b2) => a.deadline - b2.deadline);
@@ -940,38 +1076,53 @@ export function buildPaycheckPlan(incomeSources, bills, horizonDays = 95, paidBy
   // A bill on biweekly autopay has two or three instances in one month;
   // each of that month's payments should still only land on a check once.
   const recordedPayments = new Set();
+  // What's been logged by hand for a bill in a month and not yet matched to
+  // one of its instances. A payment logged on an autopay bill is the same
+  // money as a debit, not more of it, so it's matched against the month's
+  // instances earliest first — the same rule the running balance and the
+  // Monthly Plan use. (Before, every instance subtracted the whole month's
+  // logged total, so one $250 logged on a biweekly bill zeroed out both
+  // debits, and a passed debit was counted on top of the logged payment.)
+  const unmatched = new Map();
   const instances = [];
   for (const inst of rawInstances) {
     const mKey = monthKeyOf(inst.dueDate);
-    handledBillMonths.add(`${inst.billId}|${mKey}`);
-
-    // Autopay debits itself on schedule — once its date arrives, that
-    // money is already gone whether or not anyone logged it, so it's
-    // recorded as settled directly instead of waiting on a manual payment.
-    if (inst.autopay && inst.dueDate <= today) {
-      recordPaidItem(sourceCheckFor(isoDate(inst.dueDate)), inst.billId, inst.name, inst.amount, inst.dueDate, inst.deadline, `autopay-${inst.billId}-${isoDate(inst.dueDate)}`, true, true);
-      continue;
-    }
+    const billMonth = `${inst.billId}|${mKey}`;
+    handledBillMonths.add(billMonth);
 
     const monthEntry = paidByMonth[mKey] || {};
     const rec = getPaymentRecord(monthEntry, { id: inst.billId, monthly: inst.amount });
+    if (!unmatched.has(billMonth)) unmatched.set(billMonth, rec.amountPaid);
     // Every payment is attributed to whichever paycheck it actually came
     // from by its own date and reduces that check's leftover in full —
-    // including anything paid beyond the bill's minimum for this cycle.
+    // including anything paid beyond the bill's regular amount for the month.
     // Extra money is still money spent; it just gets labeled "extra"
     // instead of counting toward what's still owed. (Payments logged as
     // extras from the Extra money card get their own pass further down.)
     let allocated = 0;
+    const monthOwed = inst.monthOwed ?? inst.amount;
     for (const pmt of rec.regularPayments) {
       const amt = Number(pmt.amount) || 0;
       const key = `${inst.billId}|${mKey}|${pmt.id}`;
       if (amt <= 0.005 || recordedPayments.has(key)) continue;
       recordedPayments.add(key);
-      const isExtra = allocated >= inst.amount - 0.005;
+      const isExtra = allocated >= monthOwed - 0.005;
       recordPaidItem(sourceCheckFor(pmt.date), inst.billId, inst.name, amt, inst.dueDate, inst.deadline, pmt.id, isPaymentSettled(pmt), false, isExtra, mKey);
       allocated += amt;
     }
-    const remainingAmount = inst.amount - Math.min(rec.amountPaid, inst.amount);
+    const covered = Math.min(unmatched.get(billMonth), inst.amount);
+    unmatched.set(billMonth, unmatched.get(billMonth) - covered);
+    const remainingAmount = inst.amount - covered;
+
+    // Autopay debits itself on schedule — once its date arrives, that
+    // money is already gone whether or not anyone logged it, so whatever a
+    // logged payment didn't already cover is recorded as settled directly.
+    if (inst.autopay && inst.dueDate <= today) {
+      if (remainingAmount > 0.005) {
+        recordPaidItem(sourceCheckFor(isoDate(inst.dueDate)), inst.billId, inst.name, remainingAmount, inst.dueDate, inst.deadline, `autopay-${inst.billId}-${isoDate(inst.dueDate)}`, true, true);
+      }
+      continue;
+    }
     if (remainingAmount > 0.005) {
       instances.push({ ...inst, amount: remainingAmount });
     }

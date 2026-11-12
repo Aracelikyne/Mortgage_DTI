@@ -2,7 +2,7 @@ import { money } from "../utils/finance";
 
 // One of the Extra money card's three answers. `lens.leftover` is whatever
 // the amount couldn't be put toward — only non-zero when it's more than
-// every targetable balance (after this month's minimums) combined.
+// every targetable payoff combined.
 export default function SuggestionLens({ title, metric, lens, hint, empty, onApply }) {
   return (
     <div className="lens-card">
@@ -14,7 +14,7 @@ export default function SuggestionLens({ title, metric, lens, hint, empty, onApp
             <span className="lens-name">{r.name}</span>
             <span className="lens-amount num">+{money(r.applied)}</span>
             <span className={`lens-result ${r.paidOff ? "paid-off" : ""}`}>
-              {r.paidOff ? "paid off ✓" : `${money(r.newBalance)} left, continues next month`}
+              {r.paidOff ? (r.autopay ? "paid off ✓ — turn off its autopay" : "paid off ✓") : `${money(r.newBalance)} left, continues next month`}
             </span>
           </div>
         ))}
