@@ -369,6 +369,20 @@ code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0
 .row-action { justify-content: center; gap: 8px; color: var(--tint); }
 .row-action:disabled { color: var(--label-3); }
 .row.tone-link .row-title { color: var(--tint); }
+
+/* A tiny marker in the top-right corner that the latest build is live. */
+.version-dot {
+  position: fixed;
+  top: calc(env(safe-area-inset-top, 0px) + 4px);
+  right: calc(env(safe-area-inset-right, 0px) + 4px);
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--pink);
+  opacity: 0.7;
+  pointer-events: none;
+  z-index: 1000;
+}
 .row.destructive, .row.destructive .row-title { color: var(--red); }
 .row-amounts { display: flex; flex-direction: column; align-items: flex-end; gap: 1px; }
 .row-amount-main { color: var(--label); font-weight: 600; font-size: 17px; }

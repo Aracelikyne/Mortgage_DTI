@@ -147,6 +147,8 @@ export default function AppShell({ saved, userId, userName, initialLastEditedBy,
   return (
     <HouseholdContext.Provider value={value}>
       <div className="app">
+        {/* Marks this build as the one with "Payoff today" and the biweekly fixes. */}
+        <span className="version-dot" aria-hidden="true" />
         <Sidebar
           title="Clear to Close"
           items={orderedNavItems}
