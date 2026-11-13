@@ -79,6 +79,7 @@ export function mergedBill(keep, others) {
       }
     }
     if (!out.autopay && o.autopay) Object.assign(out, { autopay: o.autopay, autopayFrequency: o.autopayFrequency, autopayAnchor: o.autopayAnchor, autopayAmount: o.autopayAmount });
+    if (!out.twiceMonthly && o.twiceMonthly) Object.assign(out, { twiceMonthly: true, dueDay: o.dueDay, dueDay2: o.dueDay2, paymentAmount: o.paymentAmount, monthly: o.monthly });
   }
   out.notDuplicateOf = [...new Set([...(keep.notDuplicateOf || []), ...others.flatMap((o) => o.notDuplicateOf || [])])];
   return out;

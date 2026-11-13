@@ -44,14 +44,18 @@ describe("billsDueForReminder", () => {
     expect(kinds([bill({ dueDay: 31 })], day(11, 30))).toEqual(["Amex:today"]);
   });
 
-  it("biweekly autopay: heads-up 3 days before each debit, for one debit's amount", () => {
-    const upstart = bill({ name: "MK Upstart", monthly: 450, dueDay: 27, autopay: true, autopayFrequency: "biweekly", autopayAnchor: "2026-08-24", autopayAmount: 250 });
-    expect(kinds([upstart], day(11, 13))).toEqual(["MK Upstart:upcoming"]); // Nov 16 debit
-    expect(kinds([upstart], day(11, 27))).toEqual(["MK Upstart:upcoming"]); // Nov 30 debit
-    expect(kinds([upstart], day(11, 24))).toEqual([]); // not the 27th "due day"
-    expect(kinds([upstart], day(8, 18))).toEqual([]); // before the first debit
-    const [r] = billsDueForReminder([upstart as never], {}, day(11, 13));
-    expect(reminderMessage(r).body).toBe("$250 autopays in 3 days — make sure the money's there.");
+  it("twice a month: reminders for each payment, for its own amount", () => {
+    const upstart = bill({ name: "MK Upstart", monthly: 510, twiceMonthly: true, dueDay: 1, dueDay2: 15, paymentAmount: 250 });
+    expect(kinds([upstart], day(11, 12))).toEqual(["MK Upstart:upcoming"]); // Nov 15
+    expect(kinds([upstart], day(11, 15))).toEqual(["MK Upstart:today"]);
+    expect(kinds([upstart], day(11, 2))).toEqual(["MK Upstart:passed"]); // Nov 1 unpaid
+    // Payment 1 logged: no "passed" for it.
+    expect(kinds([upstart], day(11, 2), { "2026-11": { b1: { payments: [{ amount: 250 }] } } })).toEqual([]);
+    const [r] = billsDueForReminder([upstart as never], {}, day(11, 12));
+    expect(reminderMessage(r).body).toBe("$250 is due in 3 days.");
+    // On autopay: just the heads-up.
+    expect(kinds([{ ...upstart, autopay: true }], day(11, 15))).toEqual([]);
+    expect(kinds([{ ...upstart, autopay: true }], day(10, 29))).toEqual(["MK Upstart:upcoming"]); // Nov 1
   });
 
   it("skips bills with no amount or due day", () => {

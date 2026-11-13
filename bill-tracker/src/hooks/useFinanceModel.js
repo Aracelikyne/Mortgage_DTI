@@ -34,13 +34,12 @@ export function useFinanceModel(h) {
   // Everything that's due each month — what the Monthly Plan and the
   // Dashboard's "This month" card track.
   const monthlyBills = useMemo(() => [...debtBills, ...fixed], [debtBills, fixed]);
-  // Contractual monthly payments — what a lender counts for DTI.
-  const totalDebtMonthly = debtBills.reduce((s, d) => s + Number(d.monthly || 0), 0);
-  // What actually leaves the account in an average month. Differs from the
-  // above only for biweekly autopay (26 debits a year — see monthlyOutflow).
-  const totalDebtOutflow = debtBills.reduce((s, d) => s + monthlyOutflow(d), 0);
+  // Every debt's monthly payment — one figure per bill, the same on every
+  // page and in DTI (a twice-a-month bill's is its two payments).
+  const totalDebtMonthly = debtBills.reduce((s, d) => s + monthlyOutflow(d), 0);
   const totalDebtBalance = debtBills.reduce((s, d) => s + Number(d.balance || 0), 0);
-  const rentMonthly = fixed.find((f) => f.type === "Rent/Mortgage")?.monthly || 0;
+  const rent = fixed.find((f) => f.type === "Rent/Mortgage");
+  const rentMonthly = rent ? monthlyOutflow(rent) : 0;
   const dtiNumerator = totalDebtMonthly + (includeRent ? rentMonthly : 0);
   const dti = income > 0 ? (dtiNumerator / income) * 100 : null;
   // "true" qualifying DTI a lender would see today: current debts + the future mortgage,
@@ -52,7 +51,7 @@ export function useFinanceModel(h) {
 
   const totalFixedMonthly = fixed.reduce((s, f) => s + monthlyOutflow(f), 0);
   const netIncomeNum = netIncome === "" ? null : Number(netIncome);
-  const availableAfterBills = netIncomeNum !== null ? netIncomeNum - totalDebtOutflow - totalFixedMonthly : null;
+  const availableAfterBills = netIncomeNum !== null ? netIncomeNum - totalDebtMonthly - totalFixedMonthly : null;
 
   const sim = useMemo(
     () => simulatePayoff(debtsWithRunningBalance, Number(recurringExtra) || 0, boosts, strategy, { income, targetDTI: Number(targetDTI) || null, mortgageEstimate: Number(mortgageEstimate) || 0 }),
@@ -79,10 +78,12 @@ export function useFinanceModel(h) {
   );
 
   const paycheckPlan = useMemo(() => {
-    const billsForPlan = [
-      ...debts.filter((d) => d.isDebt !== false).map((d) => ({ id: d.id, name: d.name, monthly: d.monthly, dueDay: d.dueDay, graceDays: d.graceDays, splitFriendly: d.splitFriendly, autopay: d.autopay, autopayFrequency: d.autopayFrequency, autopayAnchor: d.autopayAnchor, autopayAmount: d.autopayAmount })),
-      ...fixed.map((f) => ({ id: f.id, name: f.name, monthly: f.monthly, dueDay: f.dueDay, graceDays: f.graceDays, splitFriendly: f.splitFriendly, autopay: f.autopay, autopayFrequency: f.autopayFrequency, autopayAnchor: f.autopayAnchor, autopayAmount: f.autopayAmount })),
-    ];
+    const planFields = (b) => ({
+      id: b.id, name: b.name, monthly: b.monthly, dueDay: b.dueDay, graceDays: b.graceDays, splitFriendly: b.splitFriendly, autopay: b.autopay,
+      twiceMonthly: b.twiceMonthly, dueDay2: b.dueDay2, paymentAmount: b.paymentAmount,
+      autopayFrequency: b.autopayFrequency, autopayAnchor: b.autopayAnchor, autopayAmount: b.autopayAmount, // saved before "twice a month"
+    });
+    const billsForPlan = [...debts.filter((d) => d.isDebt !== false).map(planFields), ...fixed.map(planFields)];
     return buildPaycheckPlan(incomeSources, billsForPlan, 95, paidByMonth, paycheckOverrides, Number(paycheckReserve) || 0);
   }, [incomeSources, debts, fixed, paidByMonth, paycheckOverrides, paycheckReserve]);
 
@@ -91,14 +92,23 @@ export function useFinanceModel(h) {
   // instead of resetting to the current total (and erasing all visible
   // progress) every time the page reloads. Grows automatically if new debt
   // brings the current total above it, so the bar never overflows past 100%.
-  const [lastSeenTotal, setLastSeenTotal] = useState(totalDebtBalance);
-  if (totalDebtBalance !== lastSeenTotal) {
+  //
+  // A saved high-water mark only ever grows, so one bad moment — a payoff
+  // typed or imported with extra digits, even if fixed a second later —
+  // used to stick forever ("Paid off already ($720,689,165,706)"). A
+  // baseline more than 10× everything owed or already paid off can't be
+  // real progress, so it resets to what's owed today.
+  const [lastSeenTotal, setLastSeenTotal] = useState(null);
+  const paidOffSoFar = paidOffDebts.reduce((s, d) => s + Number(d.balanceAtPayoff || 0), 0);
+  const baselineIsBogus = debtBaseline !== null && Number.isFinite(totalDebtBalance) && totalDebtBalance > 0
+    && (!Number.isFinite(Number(debtBaseline)) || debtBaseline > 10 * (totalDebtBalance + paidOffSoFar));
+  if (Number.isFinite(totalDebtBalance) && (totalDebtBalance !== lastSeenTotal || baselineIsBogus)) {
     setLastSeenTotal(totalDebtBalance);
-    if (debtBaseline === null || totalDebtBalance > debtBaseline) {
+    if (debtBaseline === null || totalDebtBalance > debtBaseline || baselineIsBogus) {
       setDebtBaseline(totalDebtBalance || 1);
     }
   }
-  const wallBaseline = Math.max(debtBaseline || 0, totalDebtBalance) || 1;
+  const wallBaseline = Math.max(baselineIsBogus ? 0 : debtBaseline || 0, totalDebtBalance) || 1;
   const paidDownSoFar = Math.max(0, wallBaseline - totalDebtBalance);
 
   // Every debt lands in exactly one group: "protected" wins over a stale
@@ -107,11 +117,11 @@ export function useFinanceModel(h) {
   const tierGroups = [1, 2, 3, 4].map((t) => ({ tier: t, items: debts.filter((d) => !d.protected && tierOf(d) === t) }));
   const protectedGroup = debts.filter((d) => d.protected);
   const protectedBalance = protectedGroup.reduce((s, d) => s + runningBalanceOf(d), 0);
-  const paidOffTotal = paidOffDebts.reduce((s, d) => s + Number(d.balanceAtPayoff || 0), 0);
+  const paidOffTotal = paidOffSoFar;
 
   return {
     runningBalances, runningBalanceOf, debtsWithRunningBalance, debtBills, monthlyBills,
-    totalDebtMonthly, totalDebtOutflow, totalDebtBalance, totalFixedMonthly, rentMonthly,
+    totalDebtMonthly, totalDebtBalance, totalFixedMonthly, rentMonthly,
     dti, trueDti, dtiBand, dtiBandLabel, netIncomeNum, availableAfterBills,
     sim, chartData, debtFreeLabel, fullDebtFreeLabel, dtiTargetLabel, dtiWithMortgageTargetLabel, hasExcludedWithBalance,
     lastExtraBatch, billNameById, paycheckPlan,

@@ -8,7 +8,7 @@ import { TIERS } from "../data/constants";
 import { balanceAnchorOf, fmtDate, isUnderwater, money, monthlyOutflow, willNeverGetExtra } from "../utils/finance";
 import BillBadges from "../components/BillBadges";
 import DuplicatesBanner from "../components/DuplicatesBanner";
-import { ordinal, paymentSummary, shortDate } from "../utils/format";
+import { dueSummary, paymentSummary, shortDate } from "../utils/format";
 import { useHouseholdContext } from "../state/HouseholdContext";
 
 // Debts as list rows grouped by payoff tier — name, today's payoff,
@@ -44,7 +44,7 @@ export default function DebtsPage() {
         )}
         subtitle={(
           <>
-            {[d.type, d.autopay && d.autopayFrequency === "biweekly" ? "autopay every 2 weeks" : d.dueDay ? `due the ${ordinal(d.dueDay)}` : null, growing ? "growing" : null].filter(Boolean).join(" · ")}
+            {[d.type, dueSummary(d), growing ? "growing" : null].filter(Boolean).join(" · ")}
             <span className="row-tracker">Payoff updated {shortDate(d.balanceUpdatedAt || balanceAnchorOf(d))}{d.balanceUpdatedBy ? ` · by ${d.balanceUpdatedBy}` : ""}</span>
           </>
         )}

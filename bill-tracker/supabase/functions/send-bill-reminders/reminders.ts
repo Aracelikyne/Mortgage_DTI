@@ -11,11 +11,13 @@ export const REMINDER_DAYS_AHEAD = 3;
 
 export type Bill = {
   id: string; name: string; monthly?: number; dueDay?: number | null; graceDays?: number; autopay?: boolean;
+  twiceMonthly?: boolean; dueDay2?: number | null; paymentAmount?: number | null;
+  // Saved before "twice a month" existed; read as twice a month (see paymentDays).
   autopayFrequency?: "monthly" | "biweekly" | null; autopayAnchor?: string | null; autopayAmount?: number | null;
 };
 export type ReminderKind = "upcoming" | "today" | "passed" | "overdue";
-// `amount` is what's actually coming out on `dueDate` — for a biweekly
-// autopay that's one debit, not the monthly payment.
+// `amount` is what's due on `dueDate` — for a twice-a-month bill that's one
+// of its two payments, not the monthly payment.
 export type Reminder = { bill: Bill; kind: ReminderKind; dueDate: Date; amount: number };
 
 function lastDayOfMonth(year: number, monthIndex: number) {
@@ -59,48 +61,64 @@ function amountPaidFor(monthEntry: Record<string, unknown>, billId: string) {
 // Autopay debits itself with nothing logged by hand, so it only gets the
 // heads-up — never "today", "passed" or "overdue".
 //
+// Mirrors paymentDaysOf / perPaymentOf in src/utils/finance.js: one due day,
+// or two for a twice-a-month bill (the lender's monthly payment split in two,
+// e.g. $250 on the 1st and $250 on the 15th). A bill saved as autopay "every
+// 2 weeks" reads as twice a month: its first debit's day and two weeks later.
+function paymentDays(bill: Bill): number[] {
+  if (bill.twiceMonthly) return [bill.dueDay, bill.dueDay2].map(Number).filter((d) => d >= 1 && d <= 31);
+  if (bill.autopay && bill.autopayFrequency === "biweekly") {
+    const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(bill.autopayAnchor || "");
+    if (!m) return [];
+    const first = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+    const second = new Date(first.getFullYear(), first.getMonth(), first.getDate() + 14);
+    return [first.getDate(), second.getDate()];
+  }
+  return bill.dueDay == null ? [] : [Number(bill.dueDay)];
+}
+
+function perPayment(bill: Bill) {
+  const half = (Number(bill.monthly) || 0) / 2;
+  if (bill.twiceMonthly) return Number(bill.paymentAmount ?? half) || 0;
+  if (bill.autopay && bill.autopayFrequency === "biweekly") return Number(bill.autopayAmount ?? half) || 0;
+  return Number(bill.monthly) || 0;
+}
+
 // Checks last month's, this month's and next month's due dates: a bill due
 // the 1st needs its heads-up at the end of the prior month, and one due the
-// 30th is "passed" or "overdue" early in the next.
-//
-// A biweekly autopay ignores its due day — it debits every 14 days from its
-// first debit — so its heads-up goes out REMINDER_DAYS_AHEAD days before each
-// debit, for that one debit's amount.
+// 30th is "passed" or "overdue" early in the next. Each of a twice-a-month
+// bill's payments gets its own reminders, for its own amount; a month's
+// logged payments cover its payments in order (payment 1 first), the same
+// way the app matches them.
 export function billsDueForReminder(bills: Bill[], paidByMonth: Record<string, Record<string, unknown>>, today: Date): Reminder[] {
   const due: Reminder[] = [];
   for (const bill of bills) {
-    if (bill.autopay && bill.autopayFrequency === "biweekly") {
-      const debit = biweeklyDebitAhead(bill, today);
-      if (debit) due.push(debit);
-      continue;
-    }
-    const monthly = Number(bill.monthly) || 0;
-    if (monthly <= 0 || bill.dueDay == null) continue;
+    const amount = perPayment(bill);
+    const days = paymentDays(bill);
+    if (amount <= 0 || days.length === 0) continue;
     const grace = Number(bill.graceDays) || 0;
+    let found: Reminder | null = null;
     for (const offset of [-1, 0, 1]) {
-      const dueDate = dueDateInMonth(Number(bill.dueDay), today.getFullYear(), today.getMonth() + offset);
-      if (amountPaidFor(paidByMonth[monthKeyOf(dueDate)] || {}, bill.id) >= monthly) continue;
-      const daysUntil = daysBetween(today, dueDate); // positive = due date is in the future
-      let kind: ReminderKind | null = null;
-      if (daysUntil === REMINDER_DAYS_AHEAD) kind = "upcoming";
-      else if (bill.autopay) kind = null;
-      else if (daysUntil === 0) kind = "today";
-      else if (daysUntil === -1) kind = "passed";
-      else if (grace > 0 && daysUntil === -(grace + 1)) kind = "overdue";
-      if (kind) { due.push({ bill, kind, dueDate, amount: monthly }); break; }
+      const dates = days
+        .map((d) => dueDateInMonth(d, today.getFullYear(), today.getMonth() + offset))
+        .sort((a, b) => a.getTime() - b.getTime());
+      for (let i = 0; i < dates.length && !found; i++) {
+        const dueDate = dates[i];
+        if (amountPaidFor(paidByMonth[monthKeyOf(dueDate)] || {}, bill.id) >= amount * (i + 1) - 0.005) continue;
+        const daysUntil = daysBetween(today, dueDate); // positive = due date is in the future
+        let kind: ReminderKind | null = null;
+        if (daysUntil === REMINDER_DAYS_AHEAD) kind = "upcoming";
+        else if (bill.autopay) kind = null;
+        else if (daysUntil === 0) kind = "today";
+        else if (daysUntil === -1) kind = "passed";
+        else if (grace > 0 && daysUntil === -(grace + 1)) kind = "overdue";
+        if (kind) found = { bill, kind, dueDate, amount };
+      }
+      if (found) break;
     }
+    if (found) due.push(found);
   }
   return due;
-}
-
-function biweeklyDebitAhead(bill: Bill, today: Date): Reminder | null {
-  const amount = Number(bill.autopayAmount ?? (Number(bill.monthly) || 0) / 2) || 0;
-  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(bill.autopayAnchor || "");
-  if (amount <= 0 || !m) return null;
-  const first = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
-  const target = new Date(today.getFullYear(), today.getMonth(), today.getDate() + REMINDER_DAYS_AHEAD);
-  const days = daysBetween(first, target);
-  return days >= 0 && days % 14 === 0 ? { bill, kind: "upcoming", dueDate: target, amount } : null;
 }
 
 function money(n: number | undefined) {

@@ -36,10 +36,10 @@ export default function ThisMonthCard({ bills, paidByMonth, setPaidByMonth, onSe
         <h3 className="next-up-title">Next Up</h3>
         {nextUp.length === 0 && <div className="muted">Nothing waiting on you right now. 🎉</div>}
         {nextUp.map((s) => (
-          <div key={`${s.monthKey}-${s.billId}`} className="next-up-row">
+          <div key={`${s.monthKey}-${s.rowId}`} className="next-up-row">
             <span className="status-emoji" aria-hidden="true">{s.emoji}</span>
             <div className="next-up-text">
-              <span className="next-up-name">{s.bill.name}</span>
+              <span className="next-up-name">{s.displayName}</span>
               <span className="next-up-note">{s.note}</span>
             </div>
             <span className="num next-up-amount">{money(s.remaining)}</span>
@@ -49,7 +49,7 @@ export default function ThisMonthCard({ bills, paidByMonth, setPaidByMonth, onSe
               <button
                 type="button"
                 className="btn btn-xs btn-tinted"
-                onClick={() => setPaidByMonth((prev) => markBillPaid(prev, s.monthKey, s.bill))}
+                onClick={() => setPaidByMonth((prev) => markBillPaid(prev, s.monthKey, s.bill, new Date(), s))}
                 title={`Logs ${money(s.remaining)} paid today`}
               >
                 Mark paid

@@ -40,9 +40,17 @@ export default function MonthlyPlanPage() {
     .map((key) => ({ key, items: statuses.filter((s) => s.status === key) }))
     .filter((g) => g.items.length > 0);
 
-  function addPayment(billId, amount, date) {
+  // A payment added from "payment 2 of 2" is tagged with its part, so it
+  // counts toward that payment rather than whichever comes first.
+  function addPayment(row, amount, date) {
     if (!(amount > 0)) return;
-    setPaidByMonth((prev) => addPaymentRecord(prev, monthKey, billId, { amount, date: date || isoDate(new Date()) }));
+    setPaidByMonth((prev) => addPaymentRecord(prev, monthKey, row.billId, { amount, date: date || isoDate(new Date()), ...(row.parts > 1 ? { part: row.part } : {}) }));
+  }
+  // Un-marking one payment of a twice-a-month bill removes just its payments.
+  function markUnpaid(row) {
+    setPaidByMonth((prev) => (row.parts > 1
+      ? row.paymentIds.reduce((next, id) => removePaymentRecord(next, monthKey, row.billId, id), prev)
+      : clearPaymentRecord(prev, monthKey, row.billId)));
   }
   function shiftMonth(delta) {
     setViewDate((d) => new Date(d.getFullYear(), d.getMonth() + delta, 1));
@@ -109,14 +117,14 @@ export default function MonthlyPlanPage() {
           >
             {g.items.map((s) => (
               <BillRow
-                key={s.billId}
+                key={s.rowId}
                 status={s}
-                rec={getPaymentRecord(monthEntry, s.bill)}
-                expanded={expandedId === s.billId}
-                onToggleExpand={() => setExpandedId((id) => (id === s.billId ? null : s.billId))}
-                onMarkPaid={() => setPaidByMonth((prev) => markBillPaid(prev, monthKey, s.bill))}
-                onMarkUnpaid={() => setPaidByMonth((prev) => clearPaymentRecord(prev, monthKey, s.billId))}
-                onAddPayment={(amount, date) => addPayment(s.billId, amount, date)}
+                rec={rowRecord(getPaymentRecord(monthEntry, s.bill), s)}
+                expanded={expandedId === s.rowId}
+                onToggleExpand={() => setExpandedId((id) => (id === s.rowId ? null : s.rowId))}
+                onMarkPaid={() => setPaidByMonth((prev) => markBillPaid(prev, monthKey, s.bill, new Date(), s))}
+                onMarkUnpaid={() => markUnpaid(s)}
+                onAddPayment={(amount, date) => addPayment(s, amount, date)}
                 onRemovePayment={(paymentId) => setPaidByMonth((prev) => removePaymentRecord(prev, monthKey, s.billId, paymentId))}
                 onUpdatePayment={(paymentId, patch) => setPaidByMonth((prev) => updatePaymentRecord(prev, monthKey, s.billId, paymentId, patch))}
               />
@@ -128,11 +136,19 @@ export default function MonthlyPlanPage() {
   );
 }
 
+// The payments that belong to one row: all of a bill's, or — for one
+// payment of a twice-a-month bill — just those counted toward it (plus the
+// bill's Extra money payments, shown on its first row).
+function rowRecord(rec, s) {
+  if ((s.parts || 1) <= 1) return rec;
+  return { ...rec, payments: rec.payments.filter((p) => s.paymentIds.includes(p.id) || (isExtraPayment(p) && s.part === 1)) };
+}
+
 function BillRow({ status: s, rec, expanded, onToggleExpand, onMarkPaid, onMarkUnpaid, onAddPayment, onRemovePayment, onUpdatePayment }) {
   const isPaid = s.status === "paid";
   // Autopay settles itself, and a $0 month has nothing to mark.
   const canToggle = !s.autopay && s.owed > 0.005;
-  const extraTotal = Math.max(0, rec.amountPaid - s.owed) + rec.extraPaid;
+  const extraTotal = (s.overpaid || 0) + (s.extraPaid || 0);
 
   return (
     <div className={`row bill-row ${expanded ? "expanded" : ""} ${isPaid ? "is-paid" : ""}`}>
@@ -143,7 +159,7 @@ function BillRow({ status: s, rec, expanded, onToggleExpand, onMarkPaid, onMarkU
             className="mark-paid"
             onClick={isPaid ? onMarkUnpaid : onMarkPaid}
             title={isPaid ? "Mark unpaid" : `Mark paid — logs ${money(s.remaining)} today`}
-            aria-label={isPaid ? `Mark ${s.bill.name} unpaid` : `Mark ${s.bill.name} paid`}
+            aria-label={isPaid ? `Mark ${s.displayName} unpaid` : `Mark ${s.displayName} paid`}
           >
             {isPaid ? <CheckCircle2 size={24} className="tone-green" /> : <Circle size={24} className="mark-paid-empty" />}
           </button>
@@ -156,7 +172,7 @@ function BillRow({ status: s, rec, expanded, onToggleExpand, onMarkPaid, onMarkU
           <span className="status-emoji" aria-hidden="true">{s.emoji}</span>
           <span className="bill-row-text">
             <span className="bill-row-name">
-              {s.bill.name}
+              {s.displayName}
               {s.autopay && <span className="badge badge-orange">Autopay</span>}
             </span>
             <span className="bill-row-note">{s.note}</span>

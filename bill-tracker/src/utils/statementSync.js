@@ -145,6 +145,8 @@ export function buildStatementPlan({ rows, headerRow, mapping, debts, fixed, asO
       dueDay: dueRaw === "" ? null : parseDueDay(dueRaw),
     };
     if (payoffRaw !== "" && entry.values.payoff === null) entry.problems.push(`can't read payoff "${payoffRaw}"`);
+    // Over $10 million is a misread cell (an account number, say), not a payoff.
+    if (entry.values.payoff > 10_000_000) entry.problems.push(`payoff "${payoffRaw}" is over $10 million — looks like the wrong column`);
     if (aprRaw !== "" && entry.values.apr === null) entry.problems.push(`can't read APR "${aprRaw}"`);
     if (monthlyRaw !== "" && entry.values.monthly === null) entry.problems.push(`can't read monthly "${monthlyRaw}"`);
     if (entry.problems.length) entry.selected = false;

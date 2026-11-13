@@ -1,56 +1,59 @@
-import SegmentedControl from "./ui/SegmentedControl";
-import { ListSection, NumberField, SwitchRow, TextField } from "./ui/List";
+import { ListRow, ListSection, NumberField, SwitchRow } from "./ui/List";
+import { monthlyFromDraft, twiceMonthlyDefaults } from "../utils/autopay";
+import { ordinal } from "../utils/format";
 
-const FREQUENCIES = [
-  { value: "monthly", label: "Monthly" },
-  { value: "biweekly", label: "Every 2 weeks" },
-];
+const cents = (n) => Number(n || 0).toLocaleString("en-US", { style: "currency", currency: "USD" });
 
-// Autopay settings inside a bill's edit sheet, so the app stops expecting a
-// manual payment each cycle and instead treats the money as committed the
-// moment it's due. Monthly autopay reuses the bill's own due day; biweekly
-// needs its own first-debit date and per-debit amount, since it lands twice
-// a month on a shifting date rather than once on a fixed day.
+// The payment fields of a bill's edit sheet: the monthly payment and due
+// day, or — with "Twice a month" on — the amount of each payment and both
+// due days, with the monthly payment worked out from them so the two can't
+// disagree. `monthlyLabel` is "Monthly payment" for a debt, "Monthly amount"
+// for a fixed expense.
 //
-// `draft` holds string inputs: autopay, autopayFrequency, autopayAnchor, autopayAmount.
-export default function AutopayFields({ draft, set, monthly }) {
-  const biweekly = draft.autopayFrequency === "biweekly";
-  // A biweekly debit that isn't half the monthly payment takes out more (or
-  // less) than "monthly" says — MK Upstart's $250 every 2 weeks is ≈$541.67
-  // a month against $450. Say so where both numbers are typed.
-  const perDebit = draft.autopayAmount !== "" && draft.autopayAmount !== null ? Number(draft.autopayAmount) : Number(monthly || 0) / 2;
-  const actualMonthly = (perDebit * 26) / 12;
-  const gap = actualMonthly - Number(monthly || 0);
-  const cents = (n) => Math.abs(n).toLocaleString("en-US", { style: "currency", currency: "USD" });
+// `draft` holds string inputs: monthly, dueDay, twiceMonthly, dueDay2, paymentAmount.
+export function PaymentScheduleFields({ draft, set, setDraft, monthlyLabel = "Monthly payment" }) {
+  const twice = !!draft.twiceMonthly;
+  const per = Number(draft.paymentAmount) || 0;
+  return (
+    <>
+      <SwitchRow
+        label="Twice a month"
+        subtitle={twice ? "Two payments a month, one balance" : undefined}
+        checked={twice}
+        onChange={(on) => setDraft((d) => ({ ...d, twiceMonthly: on, ...(on ? twiceMonthlyDefaults(d) : {}) }))}
+      />
+      {twice ? (
+        <>
+          <NumberField label="Amount per payment" value={draft.paymentAmount} onChange={set("paymentAmount")} placeholder="required" />
+          <NumberField label="Payment 1 due day" value={draft.dueDay} onChange={set("dueDay")} placeholder="required" min="1" max="31" step="1" />
+          <NumberField label="Payment 2 due day" value={draft.dueDay2} onChange={set("dueDay2")} placeholder="required" min="1" max="31" step="1" />
+          <ListRow
+            title={monthlyLabel}
+            subtitle={per > 0 ? `2 × ${cents(per)}${draft.dueDay && draft.dueDay2 ? `, due the ${ordinal(Number(draft.dueDay))} and ${ordinal(Number(draft.dueDay2))}` : ""}` : undefined}
+            detail={<span className="num">{cents(monthlyFromDraft(draft))}</span>}
+          />
+        </>
+      ) : (
+        <>
+          <NumberField label={monthlyLabel} value={draft.monthly} onChange={set("monthly")} placeholder="required" />
+          <NumberField label="Due day of month" value={draft.dueDay} onChange={set("dueDay")} placeholder="optional" min="1" max="31" step="1" />
+        </>
+      )}
+    </>
+  );
+}
+
+// Autopay on or off. It pays each payment on its due date — both of a
+// twice-a-month bill's — so the app stops waiting on a manual payment.
+export default function AutopayFields({ draft, set }) {
   return (
     <ListSection
       header="Autopay"
       footer={draft.autopay
-        ? (biweekly
-          ? "Repeats every 14 days from the first debit, so it keeps landing on the same weekday, and the due day above is ignored. These debits — 26 a year — are what the balance, payoff, budget, paycheck plan and reminders use. The monthly amount above only counts toward DTI."
-          : "Debits on this bill's due day each month. It counts as paid once that day passes, and never shows as past due.")
-        : "Turn on if this bill debits itself automatically, so the app doesn't wait on a manual payment."}
+        ? `Pays itself on ${draft.twiceMonthly ? "both due days" : "the due day"} each month. Each payment counts as paid once its day passes, and never shows as past due.`
+        : "Turn on if this bill pays itself automatically, so the app doesn't wait on a manual payment."}
     >
       <SwitchRow label="Autopay" checked={!!draft.autopay} onChange={(on) => set("autopay")(on)} />
-      {draft.autopay && (
-        <>
-          <div className="row segmented-row">
-            <SegmentedControl options={FREQUENCIES} value={draft.autopayFrequency || "monthly"} onChange={set("autopayFrequency")} label="Autopay frequency" />
-          </div>
-          {biweekly && (
-            <>
-              <TextField label="First debit date" type="date" value={draft.autopayAnchor} onChange={set("autopayAnchor")} />
-              <NumberField
-                label="Amount per debit"
-                value={draft.autopayAmount}
-                placeholder={monthly ? String(Number(monthly) / 2) : ""}
-                onChange={set("autopayAmount")}
-                hint={perDebit > 0 ? `≈${cents(actualMonthly)} a month actually debited${Number(monthly) > 0 && Math.abs(gap) >= 0.5 ? ` — ${cents(gap)} ${gap > 0 ? "more" : "less"} than the ${cents(Number(monthly))} monthly amount` : ""}.` : undefined}
-              />
-            </>
-          )}
-        </>
-      )}
     </ListSection>
   );
 }
