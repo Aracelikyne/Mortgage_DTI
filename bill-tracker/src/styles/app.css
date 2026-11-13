@@ -370,23 +370,6 @@ code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0
 .row-action:disabled { color: var(--label-3); }
 .row.tone-link .row-title { color: var(--tint); }
 
-/* A thin "LIVE" strip across the top: marks the latest build as live. */
-.live-banner {
-  position: fixed;
-  top: 0;
-  left: 0;
-  right: 0;
-  z-index: 1000;
-  padding-top: env(safe-area-inset-top, 0px);
-  background: var(--red);
-  color: #fff;
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: 0.12em;
-  line-height: 14px;
-  text-align: center;
-  pointer-events: none;
-}
 .row.destructive, .row.destructive .row-title { color: var(--red); }
 .row-amounts { display: flex; flex-direction: column; align-items: flex-end; gap: 1px; }
 .row-amount-main { color: var(--label); font-weight: 600; font-size: 17px; }
