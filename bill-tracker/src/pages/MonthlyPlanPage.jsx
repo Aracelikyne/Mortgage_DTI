@@ -6,7 +6,8 @@ import Switch from "../components/ui/Switch";
 import ProgressBar from "../components/ui/ProgressBar";
 import { ListSection } from "../components/ui/List";
 import { money, monthKeyOf, isoDate, getPaymentRecord, addPaymentRecord, removePaymentRecord, updatePaymentRecord, clearPaymentRecord, isExtraPayment } from "../utils/finance";
-import { STATUS_META, STATUS_ORDER, statusesForMonth, summarizeStatuses, markBillPaid } from "../utils/billStatus";
+import { STATUS_META, STATUS_ORDER, statusesForMonth, summarizeStatuses } from "../utils/billStatus";
+import { useMarkPaid } from "../components/MarkPaidFlow";
 import { useHouseholdContext } from "../state/HouseholdContext";
 
 const FILTERS = [
@@ -29,6 +30,7 @@ export default function MonthlyPlanPage() {
   const [filter, setFilter] = useState("toPay");
   const [expandedId, setExpandedId] = useState(null);
   const monthKey = monthKeyOf(viewDate);
+  const { markPaid, dialogs } = useMarkPaid();
   const monthEntry = paidByMonth[monthKey] || {};
 
   const statuses = useMemo(
@@ -122,7 +124,7 @@ export default function MonthlyPlanPage() {
                 rec={rowRecord(getPaymentRecord(monthEntry, s.bill), s)}
                 expanded={expandedId === s.rowId}
                 onToggleExpand={() => setExpandedId((id) => (id === s.rowId ? null : s.rowId))}
-                onMarkPaid={() => setPaidByMonth((prev) => markBillPaid(prev, monthKey, s.bill, new Date(), s))}
+                onMarkPaid={() => markPaid(s, monthKey)}
                 onMarkUnpaid={() => markUnpaid(s)}
                 onAddPayment={(amount, date) => addPayment(s, amount, date)}
                 onRemovePayment={(paymentId) => setPaidByMonth((prev) => removePaymentRecord(prev, monthKey, s.billId, paymentId))}
@@ -132,6 +134,7 @@ export default function MonthlyPlanPage() {
           </ListSection>
         ))}
       </div>
+      {dialogs}
     </>
   );
 }

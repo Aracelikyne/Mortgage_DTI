@@ -1,12 +1,14 @@
 import { ChevronRight } from "lucide-react";
 import ProgressBar from "./ui/ProgressBar";
 import { money } from "../utils/finance";
-import { STATUS_META, STATUS_ORDER, statusesForMonth, summarizeStatuses, nextUpBills, markBillPaid } from "../utils/billStatus";
+import { STATUS_META, STATUS_ORDER, statusesForMonth, summarizeStatuses, nextUpBills } from "../utils/billStatus";
+import { useMarkPaid } from "./MarkPaidFlow";
 
 // The Dashboard's at-a-glance version of the Monthly Plan: how much of this
 // month is paid, a count per status, and the handful of bills that need
 // attention next — each one a tap away from being marked paid.
-export default function ThisMonthCard({ bills, paidByMonth, setPaidByMonth, onSeeAll }) {
+export default function ThisMonthCard({ bills, paidByMonth, onSeeAll }) {
+  const { markPaid, dialogs } = useMarkPaid();
   const today = new Date();
   const statuses = statusesForMonth(bills, paidByMonth, today.getFullYear(), today.getMonth(), today);
   const summary = summarizeStatuses(statuses);
@@ -49,7 +51,7 @@ export default function ThisMonthCard({ bills, paidByMonth, setPaidByMonth, onSe
               <button
                 type="button"
                 className="btn btn-xs btn-tinted"
-                onClick={() => setPaidByMonth((prev) => markBillPaid(prev, s.monthKey, s.bill, new Date(), s))}
+                onClick={() => markPaid(s, s.monthKey)}
                 title={`Logs ${money(s.remaining)} paid today`}
               >
                 Mark paid
@@ -58,6 +60,7 @@ export default function ThisMonthCard({ bills, paidByMonth, setPaidByMonth, onSe
           </div>
         ))}
       </div>
+      {dialogs}
     </section>
   );
 }

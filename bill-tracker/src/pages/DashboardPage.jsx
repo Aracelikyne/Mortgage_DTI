@@ -12,7 +12,7 @@ export default function DashboardPage() {
       <PageHeader title="Dashboard" />
       <div className="page-content">
         <Wall />
-        <ThisMonthCard bills={h.monthlyBills} paidByMonth={h.paidByMonth} setPaidByMonth={h.setPaidByMonth} onSeeAll={() => h.setPage("monthly")} />
+        <ThisMonthCard bills={h.monthlyBills} paidByMonth={h.paidByMonth} onSeeAll={() => h.setPage("monthly")} />
 
         <h2 className="section-title">At a Glance</h2>
         <p className="section-sub">Tap any card to see exactly what it's calculating and how to change it.</p>
