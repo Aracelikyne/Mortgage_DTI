@@ -3,11 +3,7 @@
 // One answer, shared by the Monthly Plan and the Dashboard, to "where does
 // this bill stand this month?" — so the two can never disagree.
 
-import { addPaymentRecord, autopayPerDebit, biweeklyDebitsInMonth, dueDateInMonth, getPaymentRecord, isoDate, isPaymentSettled, monthKeyOf, updatePaymentRecord } from "./finance";
-
-// Lives in finance.js now, beside the running balance and paycheck plan that
-// walk the same schedule; re-exported so existing imports keep working.
-export { biweeklyDebitsInMonth };
+import { addPaymentRecord, getPaymentRecord, isoDate, isPaymentSettled, matchPaymentsToDebits, monthKeyOf, monthlyOutflow, paymentDatesInMonth, perPaymentOf, updatePaymentRecord } from "./finance";
 
 export const DUE_SOON_DAYS = 7;
 
@@ -40,58 +36,69 @@ function dollars(n) {
   return Number(n || 0).toLocaleString("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 });
 }
 
-// Where `bill` stands for the month (year, monthIndex), as of `today`.
+// Where a bill stands for the month (year, monthIndex), as of `today` —
+// one row per payment: one for most bills, two for a twice-a-month bill
+// ("MK Upstart · payment 1 of 2", "payment 2 of 2"), each with its own due
+// date and status, both coming off the same balance.
 //
-//   ✅ Paid       — regular payments (not extras) cover what's owed. A
-//                   future-dated payment that covers it still counts, with a
-//                   "scheduled" note. Autopay counts as paid once its debit
-//                   date has passed.
-//   🔴 Past due   — the due date has passed and it isn't covered; while still
+//   ✅ Paid       — payments logged for it cover it. A future-dated payment
+//                   that covers it still counts, with a "scheduled" note.
+//                   Autopay counts as paid once its date has passed.
+//   🔴 Past due   — its due date has passed and it isn't covered; while still
 //                   inside the grace period it says how many grace days are
 //                   left. Autopay never shows as past due.
 //   ⚠️ Due soon   — due within the next 7 days.
 //   📅 Upcoming   — due later, or no due day set.
 //
-// A partial payment keeps its date-based status; `paidAmount`/`owed` carry
-// the "$X of $Y".
-export function getBillStatus(bill, monthEntry, year, monthIndex, today = new Date()) {
+// Logged payments are matched to a month's payments the same way the
+// balance and the paycheck plan match them (matchPaymentsToDebits), so a
+// row's "$X of $Y" is always out of that one payment.
+export function billStatusesForMonth(bill, monthEntry, year, monthIndex, today = new Date()) {
   const t = startOfDay(today);
-  const monthly = Number(bill.monthly) || 0;
   const rec = getPaymentRecord(monthEntry || {}, bill);
-  const autopay = !!bill.autopay;
-  const biweekly = autopay && bill.autopayFrequency === "biweekly";
-
-  let owed = monthly;
-  let dueDate = bill.dueDay ? dueDateInMonth(Number(bill.dueDay), year, monthIndex) : null;
-  let debited = 0;
-  let lastDebit = null;
-  if (biweekly) {
-    // Autopay that lands every other week: what's owed this month is that
-    // month's actual debits (two, sometimes three), and each one counts as
-    // paid once its date passes.
-    const per = autopayPerDebit(bill);
-    const debits = biweeklyDebitsInMonth(bill.autopayAnchor, year, monthIndex);
-    owed = per * debits.length;
-    const passed = debits.filter((d) => d <= t);
-    debited = per * passed.length;
-    lastDebit = passed[passed.length - 1] || null;
-    dueDate = debits.find((d) => d > t) || lastDebit;
-  } else if (autopay && dueDate && dueDate <= t) {
-    debited = monthly;
-    lastDebit = dueDate;
+  const dates = paymentDatesInMonth(bill, year, monthIndex);
+  if (dates.length === 0) {
+    return [rowStatus(bill, rec, { owed: monthlyOutflow(bill), committed: rec.amountPaid, settled: rec.settledAmount, dueDate: null, payments: rec.regularPayments }, t)];
   }
+  const slots = matchPaymentsToDebits(dates, perPaymentOf(bill), rec.regularPayments, t);
+  return slots.map((slot) => {
+    const taken = !!bill.autopay && slot.date <= t; // the bank took it on its date
+    return rowStatus(bill, rec, {
+      part: slot.part,
+      parts: slots.length,
+      owed: slot.amount,
+      committed: taken ? Math.max(slot.amount, slot.matched) : slot.matched,
+      settled: taken ? Math.max(slot.amount, slot.matchedSettled) : slot.matchedSettled,
+      taken,
+      dueDate: slot.date,
+      payments: rec.regularPayments.filter((p) => slot.paymentIds.includes(p.id)),
+    }, t);
+  });
+}
 
-  // A payment logged by hand on an autopay bill is the same money as the
-  // debit, not more of it — take whichever is larger rather than adding.
-  const paidAmount = Math.max(rec.amountPaid, debited);
-  const settledAmount = Math.max(rec.settledAmount, debited);
+// A single-payment bill's status (a twice-a-month bill's first payment).
+export function getBillStatus(bill, monthEntry, year, monthIndex, today = new Date()) {
+  return billStatusesForMonth(bill, monthEntry, year, monthIndex, today)[0];
+}
+
+function rowStatus(bill, rec, row, t) {
+  const { part = 1, parts = 1, owed, committed, settled, taken = false, dueDate, payments } = row;
+  const autopay = !!bill.autopay;
   const base = {
     billId: bill.id,
+    rowId: parts > 1 ? `${bill.id}#${part}` : bill.id,
+    part,
+    parts,
+    displayName: parts > 1 ? `${bill.name} · payment ${part} of ${parts}` : bill.name,
     bill,
     owed,
-    paidAmount: Math.min(paidAmount, owed),
-    remaining: Math.max(0, owed - paidAmount),
-    extraPaid: rec.extraPaid,
+    paidAmount: Math.min(committed, owed),
+    remaining: Math.max(0, owed - committed),
+    // Extra money (from the Extra money card) is the bill's, not one
+    // payment's — shown once, on the first row.
+    extraPaid: part === 1 ? rec.extraPaid : 0,
+    overpaid: taken ? 0 : Math.max(0, committed - owed),
+    paymentIds: payments.map((p) => p.id),
     dueDate,
     autopay,
     partial: false,
@@ -102,30 +109,26 @@ export function getBillStatus(bill, monthEntry, year, monthIndex, today = new Da
   };
   const make = (status, note, extra = {}) => ({ ...base, ...extra, status, ...STATUS_META[status], note });
 
-  if (owed <= 0.005) return make("paid", biweekly ? "No autopay debits this month" : "Nothing due this month");
+  if (owed <= 0.005) return make("paid", "Nothing due this month");
 
-  if (paidAmount >= owed - 0.005) {
-    if (settledAmount < owed - 0.005) {
-      const pending = rec.regularPayments.filter((p) => !isPaymentSettled(p) && p.date);
-      const latest = pending.map((p) => p.date).sort().pop();
+  if (committed >= owed - 0.005) {
+    if (taken) return make("paid", `Autopay debited ${shortDate(dueDate)}`);
+    if (settled < owed - 0.005) {
+      const latest = payments.filter((p) => !isPaymentSettled(p, t) && p.date).map((p) => p.date).sort().pop();
       return make("paid", latest ? `Scheduled for ${shortDate(new Date(latest + "T00:00:00"))}` : "Scheduled", { scheduled: true });
     }
-    if (debited >= owed - 0.005 && lastDebit) return make("paid", `Autopay debited ${shortDate(lastDebit)}`);
-    const latestPaid = rec.regularPayments.map((p) => p.date).filter(Boolean).sort().pop();
+    const latestPaid = payments.map((p) => p.date).filter(Boolean).sort().pop();
     return make("paid", latestPaid ? `Paid ${shortDate(new Date(latestPaid + "T00:00:00"))}` : "Paid");
   }
 
-  const partial = paidAmount > 0.005;
-  const prefix = partial ? `${dollars(paidAmount)} of ${dollars(owed)} · ` : "";
-
-  if (autopay) {
-    if (!dueDate) return make("upcoming", `${prefix}Autopay — no debit date set`, { partial });
-    const days = daysBetween(t, dueDate);
-    return make(days <= DUE_SOON_DAYS ? "dueSoon" : "upcoming", `${prefix}Autopay ${days === 0 ? "today" : shortDate(dueDate)}`, { partial });
-  }
-  if (!dueDate) return make("upcoming", `${prefix}No due date set`, { partial });
+  const partial = committed > 0.005;
+  const prefix = partial ? `${dollars(committed)} of ${dollars(owed)} · ` : "";
+  if (!dueDate) return make("upcoming", `${prefix}${autopay ? "Autopay — no debit date set" : "No due date set"}`, { partial });
 
   const days = daysBetween(t, dueDate);
+  if (autopay) {
+    return make(days <= DUE_SOON_DAYS ? "dueSoon" : "upcoming", `${prefix}Autopay ${days === 0 ? "today" : shortDate(dueDate)}`, { partial });
+  }
   if (days < 0) {
     const graceDays = Number(bill.graceDays) || 0;
     const deadline = new Date(dueDate);
@@ -150,12 +153,12 @@ export function compareStatuses(a, b) {
   if (a.dueDate && b.dueDate && a.dueDate - b.dueDate !== 0) return a.dueDate - b.dueDate;
   if (a.dueDate && !b.dueDate) return -1;
   if (!a.dueDate && b.dueDate) return 1;
-  return String(a.bill.name || "").localeCompare(String(b.bill.name || ""));
+  return String(a.bill.name || "").localeCompare(String(b.bill.name || "")) || (a.part || 1) - (b.part || 1);
 }
 
 export function statusesForMonth(bills, paidByMonth, year, monthIndex, today = new Date()) {
   const monthEntry = (paidByMonth || {})[monthKeyOf(new Date(year, monthIndex, 1))] || {};
-  return bills.map((b) => getBillStatus(b, monthEntry, year, monthIndex, today)).sort(compareStatuses);
+  return bills.flatMap((b) => billStatusesForMonth(b, monthEntry, year, monthIndex, today)).sort(compareStatuses);
 }
 
 export function summarizeStatuses(statuses) {
@@ -191,16 +194,25 @@ export function nextUpBills(bills, paidByMonth, today = new Date(), upcomingLimi
 }
 
 // "Mark paid": settles payments already scheduled for the full amount, or
-// logs a payment dated today for whatever's still owed.
-export function markBillPaid(paidByMonth, monthKey, bill, today = new Date()) {
+// logs a payment dated today for whatever's still owed. `row` (a status from
+// billStatusesForMonth) marks just that payment of a twice-a-month bill —
+// the payment logged is tagged with its part, so it counts toward it.
+export function markBillPaid(paidByMonth, monthKey, bill, today = new Date(), row = null) {
   const rec = getPaymentRecord(paidByMonth[monthKey] || {}, bill);
-  const monthly = Number(bill.monthly) || 0;
-  if (rec.amountPaid >= monthly - 0.005) {
+  const split = (row?.parts || 1) > 1;
+  const owed = split ? row.owed : monthlyOutflow(bill);
+  const committed = split ? row.paidAmount : rec.amountPaid;
+  if (committed >= owed - 0.005) {
+    const ids = split ? row.paymentIds : rec.regularPayments.map((p) => p.id);
     let next = paidByMonth;
     for (const p of rec.regularPayments) {
-      if (!isPaymentSettled(p, today)) next = updatePaymentRecord(next, monthKey, bill.id, p.id, { cleared: true });
+      if (ids.includes(p.id) && !isPaymentSettled(p, today)) next = updatePaymentRecord(next, monthKey, bill.id, p.id, { cleared: true });
     }
     return next;
   }
-  return addPaymentRecord(paidByMonth, monthKey, bill.id, { amount: Math.round((monthly - rec.amountPaid) * 100) / 100, date: isoDate(today) });
+  return addPaymentRecord(paidByMonth, monthKey, bill.id, {
+    amount: Math.round((owed - committed) * 100) / 100,
+    date: isoDate(today),
+    ...(split ? { part: row.part } : {}),
+  });
 }

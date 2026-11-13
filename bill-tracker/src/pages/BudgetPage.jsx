@@ -65,11 +65,7 @@ export default function BudgetPage() {
         >
           <NumberField label="Gross monthly income" value={h.income} onChange={(v) => h.setIncome(Number(v))} />
           <NumberField label="Net take-home pay" value={h.netIncome} placeholder="after taxes" onChange={h.setNetIncome} />
-          <ListRow
-            title="Monthly debt payments"
-            subtitle={Math.abs(h.totalDebtOutflow - h.totalDebtMonthly) >= 0.5 ? `What actually goes out. DTI uses the ${money(h.totalDebtMonthly)} contractual payments.` : undefined}
-            detail={<span className="num">{money(h.totalDebtOutflow)}</span>}
-          />
+          <ListRow title="Monthly debt payments" detail={<span className="num">{money(h.totalDebtMonthly)}</span>} />
           <ListRow title="Fixed expenses" detail={<span className="num">{money(h.totalFixedMonthly)}</span>} />
           {h.netIncomeNum !== null && (
             <ListRow

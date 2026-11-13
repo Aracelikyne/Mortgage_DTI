@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { getBillStatus, biweeklyDebitsInMonth, statusesForMonth, summarizeStatuses, nextUpBills, markBillPaid } from "./billStatus";
+import { getBillStatus, billStatusesForMonth, statusesForMonth, summarizeStatuses, nextUpBills, markBillPaid } from "./billStatus";
 
 // "Today" is Tuesday, October 20, 2026 for every test.
 const TODAY = new Date(2026, 9, 20, 9, 30);
@@ -66,12 +66,38 @@ describe("getBillStatus", () => {
     expect(getBillStatus(ap, {}, 2026, 8, TODAY).status).toBe("paid");
   });
 
-  it("handles biweekly autopay: that month's debits, each paid once its date passes", () => {
-    const ap = bill({ autopay: true, autopayFrequency: "biweekly", autopayAnchor: "2026-10-03", autopayAmount: 450, dueDay: null, monthly: 900 });
-    expect(biweeklyDebitsInMonth("2026-10-03", 2026, 9).map((d) => d.getDate())).toEqual([3, 17, 31]);
-    expect(oct(ap)).toMatchObject({ status: "upcoming", owed: 1350, paidAmount: 900, remaining: 450, partial: true, note: "$900 of $1,350 · Autopay Oct 31" });
-    expect(getBillStatus(ap, {}, 2026, 8, TODAY)).toMatchObject({ status: "paid", note: "No autopay debits this month" }); // before the first debit
-    expect(getBillStatus(ap, {}, 2026, 10, TODAY)).toMatchObject({ owed: 900, status: "upcoming" }); // Nov 14 + Nov 28
+  it("shows a twice-a-month bill as two payments, each with its own date and status", () => {
+    // MK Upstart: $250 on the 1st and the 15th, by hand. $250 paid Nov 2 (a
+    // day late for payment 1), $250 logged ahead for Nov 15; today Nov 12.
+    const mk = bill({ id: "mk", name: "MK Upstart", twiceMonthly: true, dueDay: 1, dueDay2: 15, paymentAmount: 250, monthly: 510 });
+    const nov = { mk: { payments: [{ id: "a", amount: 250, date: "2026-11-02" }, { id: "b", amount: 250, date: "2026-11-15" }] } };
+    const rows = billStatusesForMonth(mk, nov, 2026, 10, new Date(2026, 10, 12));
+    expect(rows.map((r) => [r.displayName, r.owed, r.status, r.note])).toEqual([
+      ["MK Upstart · payment 1 of 2", 250, "paid", "Paid Nov 2"],
+      ["MK Upstart · payment 2 of 2", 250, "paid", "Scheduled for Nov 15"],
+    ]);
+    // Together they're the bill's monthly payment, every month.
+    expect(rows.reduce((s, r) => s + r.owed, 0)).toBe(500);
+    // Nothing logged: payment 1 is past due, payment 2 due soon.
+    expect(billStatusesForMonth(mk, {}, 2026, 10, new Date(2026, 10, 12)).map((r) => r.status)).toEqual(["pastDue", "dueSoon"]);
+  });
+
+  it("autopay twice a month: each payment paid once its date passes", () => {
+    const mk = bill({ id: "mk", twiceMonthly: true, dueDay: 1, dueDay2: 15, paymentAmount: 250, autopay: true });
+    expect(billStatusesForMonth(mk, {}, 2026, 10, new Date(2026, 10, 12)).map((r) => [r.status, r.note])).toEqual([
+      ["paid", "Autopay debited Nov 1"],
+      ["dueSoon", "Autopay Nov 15"],
+    ]);
+  });
+
+  it("marks one payment of a twice-a-month bill paid, tagged so it counts toward that payment", () => {
+    const mk = bill({ id: "mk", twiceMonthly: true, dueDay: 1, dueDay2: 15, paymentAmount: 250 });
+    const today = new Date(2026, 10, 12);
+    const [, second] = billStatusesForMonth(mk, {}, 2026, 10, today);
+    const pbm = markBillPaid({}, "2026-11", mk, today, second);
+    expect(pbm["2026-11"].mk.payments).toMatchObject([{ amount: 250, part: 2 }]);
+    const rows = billStatusesForMonth(mk, pbm["2026-11"], 2026, 10, today);
+    expect(rows.map((r) => r.status)).toEqual(["pastDue", "paid"]);
   });
 
   it("calls an unpaid bill from a past month past due", () => {

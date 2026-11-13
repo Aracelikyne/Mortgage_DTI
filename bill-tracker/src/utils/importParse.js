@@ -322,6 +322,8 @@ function problemsFor(values, target, cells, mapping) {
   }
   if (target === "fixed" && !("monthly" in values)) problems.push("no monthly amount");
   if (target === "debts" && !("monthly" in values) && !("balance" in values)) problems.push("no balance or monthly payment");
+  // Over $10 million is a misread cell (an account number, say), not a balance.
+  if (values.balance > 10_000_000) problems.push(`balance "${raw("balance")}" is over $10 million — looks like the wrong column`);
   return problems;
 }
 

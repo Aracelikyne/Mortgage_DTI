@@ -1,4 +1,4 @@
-import { autopayPerDebit, isBiweeklyAutopay, money, monthlyOutflow } from "./finance";
+import { isTwiceMonthly, money, monthlyOutflow, paymentDaysOf, perPaymentOf } from "./finance";
 
 // 1 → "1st", 22 → "22nd", 13 → "13th".
 export function ordinal(n) {
@@ -23,11 +23,15 @@ export function shortDate(iso) {
   return new Date(iso + "T00:00:00").toLocaleDateString("en-US", { month: "numeric", day: "numeric", year: "2-digit" });
 }
 
-// A bill's payment as it actually happens: "$450/mo", or for a biweekly
-// autopay "$250 / 2 wks · ≈$542/mo" — the per-debit amount and what that
-// works out to in an average month (26 debits a year), not the monthly
-// payment field, which a biweekly debit can differ from.
+// A bill's monthly payment for a list row: "$450/mo", or for a
+// twice-a-month bill "$500/mo · 2 × $250".
 export function paymentSummary(bill) {
-  if (isBiweeklyAutopay(bill)) return `${money(autopayPerDebit(bill))} / 2 wks · ≈${money(monthlyOutflow(bill))}/mo`;
+  if (isTwiceMonthly(bill)) return `${money(monthlyOutflow(bill))}/mo · 2 × ${money(perPaymentOf(bill))}`;
   return `${money(Number(bill?.monthly || 0))}/mo`;
+}
+
+// When a bill is due: "due the 21st", or "due the 1st & 15th".
+export function dueSummary(bill) {
+  const days = paymentDaysOf(bill);
+  return days.length ? `due the ${days.map(ordinal).join(" & ")}` : null;
 }

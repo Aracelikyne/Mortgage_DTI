@@ -5,8 +5,8 @@ import FixedEditorSheet from "../components/FixedEditorSheet";
 import BillBadges from "../components/BillBadges";
 import DuplicatesBanner from "../components/DuplicatesBanner";
 import { ListRow, ListSection } from "../components/ui/List";
-import { money } from "../utils/finance";
-import { ordinal, paymentSummary } from "../utils/format";
+import { isTwiceMonthly, money } from "../utils/finance";
+import { dueSummary, paymentSummary } from "../utils/format";
 import { useHouseholdContext } from "../state/HouseholdContext";
 
 export default function FixedPage() {
@@ -39,8 +39,8 @@ export default function FixedPage() {
               <ListRow
                 key={f.id}
                 title={<>{f.name}{f.autopay && <Zap size={14} className="inline-icon tone-orange" aria-label="Autopay" />}<BillBadges item={f} kind="fixed" /></>}
-                subtitle={[f.type, f.autopay && f.autopayFrequency === "biweekly" ? "autopay every 2 weeks" : f.dueDay ? `due the ${ordinal(f.dueDay)}` : null, f.note || null].filter(Boolean).join(" · ")}
-                detail={<span className="num">{f.autopay && f.autopayFrequency === "biweekly" ? paymentSummary(f) : money(Number(f.monthly || 0))}</span>}
+                subtitle={[f.type, dueSummary(f), f.note || null].filter(Boolean).join(" · ")}
+                detail={<span className="num">{isTwiceMonthly(f) ? paymentSummary(f) : money(Number(f.monthly || 0))}</span>}
                 onClick={() => setEditing(f)}
               />
             ))}

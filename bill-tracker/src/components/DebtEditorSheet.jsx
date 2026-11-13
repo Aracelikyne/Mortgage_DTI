@@ -1,9 +1,9 @@
 import { useState } from "react";
 import Sheet, { SheetAction } from "./ui/Sheet";
-import AutopayFields from "./AutopayFields";
+import AutopayFields, { PaymentScheduleFields } from "./AutopayFields";
 import ReviewSection from "./ReviewSection";
 import PayoffCalculator from "./PayoffCalculator";
-import { autopayDraft, autopayIncomplete, autopayPatch } from "../utils/autopay";
+import { autopayDraft, autopayIncomplete, autopayPatch, monthlyFromDraft } from "../utils/autopay";
 import { ListRow, ListSection, NumberField, SelectField, SwitchRow, TextField } from "./ui/List";
 import { CATEGORY_OPTIONS, PRIORITY_OPTIONS } from "../data/constants";
 import { balanceAnchorOf, isoDate, money, projectPayoff } from "../utils/finance";
@@ -44,7 +44,10 @@ export default function DebtEditorSheet({ debt, growing, paidByMonth, userName, 
   // below can still override it.
   const setCategory = (v) => setDraft((d) => ({ ...d, category: v, inGoal: v !== "protected" }));
 
-  const valid = draft.name.trim() !== "" && (!isNew || draft.monthly !== "") && !autopayIncomplete(draft);
+  // A payoff over $10 million is a typo, not a debt — saving one used to throw
+  // the debt wall's "paid off already" into the billions.
+  const payoffTooBig = Number(draft.balance) > 10_000_000;
+  const valid = draft.name.trim() !== "" && (!isNew || draft.monthly !== "" || draft.twiceMonthly) && !autopayIncomplete(draft) && !payoffTooBig;
 
   const draftBalance = fromInput(draft.balance);
   const payoffChanged = isNew || String(draftBalance ?? "") !== String(debt.balance ?? "");
@@ -56,7 +59,7 @@ export default function DebtEditorSheet({ debt, growing, paidByMonth, userName, 
     balance: draftBalance,
     balanceAsOf: draftAsOf,
     apr: fromInput(draft.apr),
-    monthly: fromInput(draft.monthly, 0),
+    monthly: monthlyFromDraft(draft),
     dueDay: fromInput(draft.dueDay),
     ...autopayPatch(draft),
   };
@@ -67,7 +70,7 @@ export default function DebtEditorSheet({ debt, growing, paidByMonth, userName, 
     onSave({
       name: draft.name.trim(),
       type: draft.type,
-      monthly: fromInput(draft.monthly, 0),
+      monthly: monthlyFromDraft(draft),
       balance,
       ...(payoffChanged ? { balanceAsOf: isoDate(new Date()), balanceUpdatedAt: isoDate(new Date()), balanceUpdatedBy: userName } : {}),
       review: draft.review,
@@ -102,13 +105,13 @@ export default function DebtEditorSheet({ debt, growing, paidByMonth, userName, 
               {payoffToday && payoffToday.paymentsApplied > 0 && <> Payoff today counts {payoffToday.paymentsApplied} payment{payoffToday.paymentsApplied === 1 ? "" : "s"} since then. It's what Extra money uses to pay a debt off completely.</>}
               {growing && <span className="tone-red"> Growing — payments aren't covering the interest.</span>}
               {missing.length > 0 && <span className="tone-red"> Needs info: {missing.join(" and ")}.</span>}
+              {payoffTooBig && <span className="tone-red"> A payoff over $10 million looks like a typo — check the number.</span>}
             </>
           )}
         >
-          <NumberField label="Monthly payment" value={draft.monthly} onChange={set("monthly")} placeholder="required" />
+          <PaymentScheduleFields draft={draft} set={set} setDraft={setDraft} />
           <NumberField label={`Payoff as of ${shortDate(draftAsOf)}`} value={draft.balance} onChange={set("balance")} placeholder="Needs info" />
           <NumberField label="APR %" value={draft.apr} onChange={set("apr")} placeholder="Needs info" />
-          <NumberField label="Due day of month" value={draft.dueDay} onChange={set("dueDay")} placeholder="optional" min="1" max="31" step="1" />
           <NumberField label="Grace period (days)" value={draft.graceDays} onChange={set("graceDays")} placeholder="0" min="0" step="1" />
           {payoffToday && (
             <ListRow
@@ -132,7 +135,7 @@ export default function DebtEditorSheet({ debt, growing, paidByMonth, userName, 
           <SwitchRow label="OK to split across paychecks" checked={draft.splitFriendly} onChange={set("splitFriendly")} />
         </ListSection>
 
-        <AutopayFields draft={draft} set={set} monthly={draft.monthly} />
+        <AutopayFields draft={draft} set={set} />
 
         {!isNew && (
           <ListSection footer="Moves it to the Paid Off list — nothing's erased, and it can be restored from there.">
