@@ -147,8 +147,8 @@ export default function AppShell({ saved, userId, userName, initialLastEditedBy,
   return (
     <HouseholdContext.Provider value={value}>
       <div className="app">
-        {/* Solid red: marks the latest build as live. */}
-        <span className="version-dot" aria-hidden="true" />
+        {/* Marks the latest build as live. */}
+        <div className="live-banner" aria-hidden="true">LIVE</div>
         <Sidebar
           title="Clear to Close"
           items={orderedNavItems}

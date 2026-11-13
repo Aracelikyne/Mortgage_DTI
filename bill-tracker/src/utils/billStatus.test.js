@@ -19,9 +19,25 @@ describe("getBillStatus", () => {
     expect(s).toMatchObject({ status: "paid", emoji: "✅", scheduled: false, paidAmount: 100, remaining: 0, note: "Paid Oct 14" });
   });
 
-  it("counts a future-dated payment that covers the bill as Paid, noted as scheduled", () => {
+  it("before the rules began (Nov 12, 2026), a future-dated payment that covers the bill counts as Paid", () => {
     const s = oct(bill({ dueDay: 28 }), [pay(100, "2026-10-27")]);
     expect(s).toMatchObject({ status: "paid", scheduled: true, note: "Scheduled for Oct 27" });
+    // ...and nothing is assumed paid: those balances were already current.
+    expect(getBillStatus(bill({ dueDay: 15 }), {}, 2026, 7, TODAY)).toMatchObject({ status: "pastDue", assumed: false });
+  });
+
+  it("from Nov 12, 2026: a payment dated ahead keeps the bill in To pay until it happens or is cleared", () => {
+    const dec = new Date(2026, 11, 3);
+    const b = bill({ dueDay: 28 });
+    const s = getBillStatus(b, { b: { payments: [pay(100, "2026-12-27")] } }, 2026, 11, dec);
+    expect(s).toMatchObject({ status: "upcoming", scheduled: true, paidAmount: 0, remaining: 100, note: "Scheduled for Dec 27 · due Dec 28" });
+    expect(getBillStatus(b, { b: { payments: [pay(100, "2026-12-27", { cleared: true })] } }, 2026, 11, dec)).toMatchObject({ status: "paid", paidAmount: 100 });
+  });
+
+  it("from Nov 12, 2026: a payment left unmarked 60 days past its due date is assumed paid", () => {
+    const b = bill({ dueDay: 15 });
+    expect(getBillStatus(b, {}, 2026, 11, new Date(2027, 1, 14))).toMatchObject({ status: "paid", assumed: true, note: "Assumed paid — not marked within 60 days" }); // Dec 15: 61 days
+    expect(getBillStatus(b, {}, 2026, 11, new Date(2027, 1, 12))).toMatchObject({ status: "pastDue", assumed: false }); // 59 days
   });
 
   it("doesn't count extra payments toward Paid", () => {
@@ -74,8 +90,11 @@ describe("getBillStatus", () => {
     const rows = billStatusesForMonth(mk, nov, 2026, 10, new Date(2026, 10, 12));
     expect(rows.map((r) => [r.displayName, r.owed, r.status, r.note])).toEqual([
       ["MK Upstart · payment 1 of 2", 250, "paid", "Paid Nov 2"],
-      ["MK Upstart · payment 2 of 2", 250, "paid", "Scheduled for Nov 15"],
+      ["MK Upstart · payment 2 of 2", 250, "dueSoon", "Scheduled for Nov 15 · due Nov 15"],
     ]);
+    // Leaves To pay only once both are done: marked paid, dated past, or cleared.
+    const cleared = { mk: { payments: [nov.mk.payments[0], { ...nov.mk.payments[1], cleared: true }] } };
+    expect(billStatusesForMonth(mk, cleared, 2026, 10, new Date(2026, 10, 12)).map((r) => r.status)).toEqual(["paid", "paid"]);
     // Together they're the bill's monthly payment, every month.
     expect(rows.reduce((s, r) => s + r.owed, 0)).toBe(500);
     // Nothing logged: payment 1 is past due, payment 2 due soon.

@@ -199,6 +199,21 @@ function startOfDate(d) {
   return out;
 }
 
+// A payment nobody marked paid within this many days of its due date is
+// assumed paid: it moves to Paid on the Monthly Plan and comes off the
+// balance on its due date, so a forgotten checkmark doesn't leave a debt
+// looking higher than it is forever.
+export const ASSUME_PAID_AFTER_DAYS = 60;
+
+// The paid rules — unmarked 60 days is assumed paid, a payment dated ahead
+// keeps a bill in "To pay", the last-month and past-due reminders — start
+// with payments due on this date. Everything due before it was current when
+// the rules began, so it's left exactly as it was.
+export const PAYMENT_RULES_START = "2026-11-12";
+export function underPaymentRules(dueDate) {
+  return !!dueDate && isoDate(dueDate) >= PAYMENT_RULES_START;
+}
+
 // Bills saved before "twice a month" existed could be set to autopay
 // "every 2 weeks" from a first-debit date. They read as twice a month: the
 // first debit's day of the month and the day two weeks after it, at the
@@ -312,6 +327,28 @@ function autopayDebitsBetween(debt, paidByMonth, from, to) {
   return out;
 }
 
+// Payments on a bill paid by hand that nobody marked within 60 days of their
+// due date (ASSUME_PAID_AFTER_DAYS): assumed paid, on the due date, for
+// whatever wasn't logged. Due dates after `from`, and at least 60 days
+// before `asOf`. `skipFromMonth` leaves out months scheduledPayments
+// already assumes for a future payoff, so nothing is counted twice.
+function assumedPaymentsThrough(debt, paidByMonth, from, asOf, skipFromMonth = null) {
+  if (debt?.autopay) return [];
+  const latest = new Date(asOf);
+  latest.setDate(latest.getDate() - ASSUME_PAID_AFTER_DAYS - 1);
+  const out = [];
+  const cursor = new Date(from.getFullYear(), from.getMonth(), 1);
+  for (let guard = 0; cursor <= latest && guard < 600; guard++) {
+    if (skipFromMonth && cursor >= skipFromMonth) break;
+    for (const slot of monthSlots(debt, paidByMonth, cursor.getFullYear(), cursor.getMonth(), asOf)) {
+      const unpaid = slot.amount - Math.min(slot.amount, slot.matchedSettled);
+      if (slot.date > from && slot.date <= latest && underPaymentRules(slot.date) && unpaid > 0.005) out.push({ amount: Math.round(unpaid * 100) / 100, date: isoDate(slot.date), assumed: true });
+    }
+    cursor.setMonth(cursor.getMonth() + 1);
+  }
+  return out;
+}
+
 // Autopay debits itself with nothing logged by hand, so its debits since
 // the payoff's anchor date count as payments too — otherwise an autopay
 // debt's balance would never move.
@@ -392,7 +429,10 @@ export function projectPayoff(debt, paidByMonth, onDate = new Date(), today = ne
   const happened = allPaymentsForBill(pbm, debt.id).filter((p) => p.date && dayOf(p.date) <= cutoff);
   const debited = autopayDebitsBetween(debt, pbm, anchor, cutoff);
   const scheduled = target > t ? scheduledPayments(debt, pbm, t, target) : [];
-  const rb = computeRunningBalance(debt, [...happened, ...debited, ...scheduled]);
+  // Unmarked 60+ days by the payoff date: assumed paid. For a future date,
+  // this month on is already in `scheduled`.
+  const assumedOld = assumedPaymentsThrough(debt, pbm, anchor, target, target > t ? new Date(t.getFullYear(), t.getMonth(), 1) : null);
+  const rb = computeRunningBalance(debt, [...happened, ...debited, ...scheduled, ...assumedOld]);
 
   const hasApr = debt.apr !== null && debt.apr !== undefined && debt.apr !== "" && Number(debt.apr) > 0;
   const accruedThrough = dayOf(rb.accruedThrough);

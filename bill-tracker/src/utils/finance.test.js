@@ -367,6 +367,16 @@ describe("payoff as of a date", () => {
     expect(projectPayoff(d, pbm, new Date(2026, 10, 19), nov12).payoff).toBe(700);
   });
 
+  it("takes a payment nobody marked within 60 days off the balance, on its due date — from Nov 12, 2026 on", () => {
+    const d = card({ apr: 0, balanceAsOf: "2026-08-01", dueDay: 10, monthly: 100 });
+    // Before the rules began nothing is assumed: Aug–Nov 10 were current already.
+    expect(projectPayoff(d, {}, nov12, nov12).payoff).toBe(1000);
+    // Dec 10 and Jan 10 are 60+ days back on Mar 15, 2027; Feb 10 isn't. January was logged.
+    const mar15 = new Date(2027, 2, 15);
+    const pbm = { "2027-01": { c: { payments: [{ id: "j", amount: 100, date: "2027-01-10" }] } } };
+    expect(projectPayoff(d, pbm, mar15, mar15).payoff).toBe(800); // Dec assumed + Jan logged
+  });
+
   it("is null without a payoff entered", () => {
     expect(projectPayoff(card({ balance: null }), {}, nov12, nov12)).toBeNull();
   });

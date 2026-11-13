@@ -370,17 +370,22 @@ code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0
 .row-action:disabled { color: var(--label-3); }
 .row.tone-link .row-title { color: var(--tint); }
 
-/* A tiny marker in the top-right corner that the latest build is live. */
-.version-dot {
+/* A thin "LIVE" strip across the top: marks the latest build as live. */
+.live-banner {
   position: fixed;
-  top: calc(env(safe-area-inset-top, 0px) + 4px);
-  right: calc(env(safe-area-inset-right, 0px) + 4px);
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--red);
-  pointer-events: none;
+  top: 0;
+  left: 0;
+  right: 0;
   z-index: 1000;
+  padding-top: env(safe-area-inset-top, 0px);
+  background: var(--red);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  line-height: 14px;
+  text-align: center;
+  pointer-events: none;
 }
 .row.destructive, .row.destructive .row-title { color: var(--red); }
 .row-amounts { display: flex; flex-direction: column; align-items: flex-end; gap: 1px; }
